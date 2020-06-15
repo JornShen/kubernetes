@@ -78,6 +78,7 @@ const (
 
 	// owner: @mikedanese
 	// beta: v1.8
+	// ga: v1.19
 	//
 	// Automatically renews the client certificate used for communicating with
 	// the API server as the certificate approaches expiration.
@@ -193,12 +194,6 @@ const (
 	// Postpone deletion of a PV or a PVC when they are being used
 	StorageObjectInUseProtection featuregate.Feature = "StorageObjectInUseProtection"
 
-	// owner: @aveshagarwal
-	// alpha: v1.9
-	//
-	// Enable resource limits priority function
-	ResourceLimitsPriorityFunction featuregate.Feature = "ResourceLimitsPriorityFunction"
-
 	// owner: @m1093782566
 	// GA: v1.11
 	//
@@ -297,6 +292,13 @@ const (
 	//
 	// Enables CSI Inline volumes support for pods
 	CSIInlineVolume featuregate.Feature = "CSIInlineVolume"
+
+	// owner: @alculquicondor
+	// alpha: v1.19
+	//
+	// Enables the use of PodTopologySpread scheduling plugin to do default
+	// spreading and disables legacy DefaultPodTopologySpread plugin.
+	DefaultPodTopologySpread featuregate.Feature = "DefaultPodTopologySpread"
 
 	// owner: @tallclair
 	// alpha: v1.12
@@ -407,6 +409,19 @@ const (
 	// Disables the Azure File in-tree driver.
 	// Expects Azure File CSI Driver to be installed and configured on all nodes.
 	CSIMigrationAzureFileComplete featuregate.Feature = "CSIMigrationAzureFileComplete"
+
+	// owner: @divyenpatel
+	// alpha: v1.19
+	//
+	// Enables the vSphere in-tree driver to vSphere CSI Driver migration feature.
+	CSIMigrationvSphere featuregate.Feature = "CSIMigrationvSphere"
+
+	// owner: @divyenpatel
+	// alpha: v1.19
+	//
+	// Disables the vSphere in-tree driver.
+	// Expects vSphere CSI Driver to be installed and configured on all nodes.
+	CSIMigrationvSphereComplete featuregate.Feature = "CSIMigrationvSphereComplete"
 
 	// owner: @gnufied
 	// alpha: v1.18
@@ -593,7 +608,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	DevicePlugins:                  {Default: true, PreRelease: featuregate.Beta},
 	TaintBasedEvictions:            {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.19
 	RotateKubeletServerCertificate: {Default: true, PreRelease: featuregate.Beta},
-	RotateKubeletClientCertificate: {Default: true, PreRelease: featuregate.Beta},
+	RotateKubeletClientCertificate: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.20
 	LocalStorageCapacityIsolation:  {Default: true, PreRelease: featuregate.Beta},
 	Sysctls:                        {Default: true, PreRelease: featuregate.Beta},
 	EphemeralContainers:            {Default: false, PreRelease: featuregate.Alpha},
@@ -611,7 +626,6 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	CSINodeInfo:                    {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.19
 	BlockVolume:                    {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.20
 	StorageObjectInUseProtection:   {Default: true, PreRelease: featuregate.GA},
-	ResourceLimitsPriorityFunction: {Default: false, PreRelease: featuregate.Alpha},
 	SupportIPVSProxyMode:           {Default: true, PreRelease: featuregate.GA},
 	SupportPodPidsLimit:            {Default: true, PreRelease: featuregate.Beta},
 	SupportNodePidsLimit:           {Default: true, PreRelease: featuregate.Beta},
@@ -630,6 +644,8 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	CSIMigrationAzureDiskComplete:  {Default: false, PreRelease: featuregate.Alpha},
 	CSIMigrationAzureFile:          {Default: false, PreRelease: featuregate.Alpha},
 	CSIMigrationAzureFileComplete:  {Default: false, PreRelease: featuregate.Alpha},
+	CSIMigrationvSphere:            {Default: false, PreRelease: featuregate.Alpha},
+	CSIMigrationvSphereComplete:    {Default: false, PreRelease: featuregate.Alpha},
 	RunAsGroup:                     {Default: true, PreRelease: featuregate.Beta},
 	CSIMigrationOpenStack:          {Default: false, PreRelease: featuregate.Beta}, // Off by default (requires OpenStack Cinder CSI driver)
 	CSIMigrationOpenStackComplete:  {Default: false, PreRelease: featuregate.Alpha},
@@ -666,6 +682,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	HugePageStorageMediumSize:                      {Default: false, PreRelease: featuregate.Alpha},
 	ExternalPolicyForExternalIP:                    {Default: true, PreRelease: featuregate.GA}, // remove in 1.20
 	AnyVolumeDataSource:                            {Default: false, PreRelease: featuregate.Alpha},
+	DefaultPodTopologySpread:                       {Default: false, PreRelease: featuregate.Alpha},
 
 	// inherited features from generic apiserver, relisted here to get a conflict if it is changed
 	// unintentionally on either side:
@@ -677,6 +694,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	genericfeatures.DryRun:                  {Default: true, PreRelease: featuregate.GA},
 	genericfeatures.ServerSideApply:         {Default: true, PreRelease: featuregate.Beta},
 	genericfeatures.APIPriorityAndFairness:  {Default: false, PreRelease: featuregate.Alpha},
+	genericfeatures.WarningHeaders:          {Default: true, PreRelease: featuregate.Beta},
 
 	// features that enable backwards compatibility but are scheduled to be removed
 	// ...
