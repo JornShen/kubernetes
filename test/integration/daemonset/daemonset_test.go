@@ -85,7 +85,7 @@ func setupScheduler(
 	informerFactory informers.SharedInformerFactory,
 ) {
 	eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{
-		Interface: cs.EventsV1beta1().Events(""),
+		Interface: cs.EventsV1(),
 	})
 
 	sched, err := scheduler.New(
@@ -416,7 +416,7 @@ func updateDS(t *testing.T, dsClient appstyped.DaemonSetInterface, dsName string
 
 func forEachStrategy(t *testing.T, tf func(t *testing.T, strategy *apps.DaemonSetUpdateStrategy)) {
 	for _, strategy := range updateStrategies() {
-		t.Run(fmt.Sprintf("%s (%v)", t.Name(), strategy),
+		t.Run(fmt.Sprintf("%s_%s", t.Name(), strategy.Type),
 			func(tt *testing.T) { tf(tt, strategy) })
 	}
 }

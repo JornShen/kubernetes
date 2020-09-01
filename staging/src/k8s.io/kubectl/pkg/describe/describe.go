@@ -156,6 +156,28 @@ func (pw *prefixWriter) Flush() {
 	}
 }
 
+// nestedPrefixWriter implements PrefixWriter by increasing the level
+// before passing text on to some other writer.
+type nestedPrefixWriter struct {
+	PrefixWriter
+	indent int
+}
+
+var _ PrefixWriter = &prefixWriter{}
+
+// NewPrefixWriter creates a new PrefixWriter.
+func NewNestedPrefixWriter(out PrefixWriter, indent int) PrefixWriter {
+	return &nestedPrefixWriter{PrefixWriter: out, indent: indent}
+}
+
+func (npw *nestedPrefixWriter) Write(level int, format string, a ...interface{}) {
+	npw.PrefixWriter.Write(level+npw.indent, format, a...)
+}
+
+func (npw *nestedPrefixWriter) WriteLine(a ...interface{}) {
+	npw.PrefixWriter.Write(npw.indent, "%s", fmt.Sprintln(a...))
+}
+
 func describerMap(clientConfig *rest.Config) (map[schema.GroupKind]ResourceDescriber, error) {
 	c, err := clientset.NewForConfig(clientConfig)
 	if err != nil {
@@ -187,6 +209,8 @@ func describerMap(clientConfig *rest.Config) (map[schema.GroupKind]ResourceDescr
 		{Group: extensionsv1beta1.GroupName, Kind: "Ingress"}:                     &IngressDescriber{c},
 		{Group: networkingv1beta1.GroupName, Kind: "Ingress"}:                     &IngressDescriber{c},
 		{Group: networkingv1beta1.GroupName, Kind: "IngressClass"}:                &IngressClassDescriber{c},
+		{Group: networkingv1.GroupName, Kind: "Ingress"}:                          &IngressDescriber{c},
+		{Group: networkingv1.GroupName, Kind: "IngressClass"}:                     &IngressClassDescriber{c},
 		{Group: batchv1.GroupName, Kind: "Job"}:                                   &JobDescriber{c},
 		{Group: batchv1.GroupName, Kind: "CronJob"}:                               &CronJobDescriber{c},
 		{Group: appsv1.GroupName, Kind: "StatefulSet"}:                            &StatefulSetDescriber{c},
@@ -820,6 +844,8 @@ func describeVolumes(volumes []corev1.Volume, w PrefixWriter, space string) {
 			printGlusterfsVolumeSource(volume.VolumeSource.Glusterfs, w)
 		case volume.VolumeSource.PersistentVolumeClaim != nil:
 			printPersistentVolumeClaimVolumeSource(volume.VolumeSource.PersistentVolumeClaim, w)
+		case volume.VolumeSource.Ephemeral != nil:
+			printEphemeralVolumeSource(volume.VolumeSource.Ephemeral, w)
 		case volume.VolumeSource.RBD != nil:
 			printRBDVolumeSource(volume.VolumeSource.RBD, w)
 		case volume.VolumeSource.Quobyte != nil:
@@ -1033,6 +1059,18 @@ func printPersistentVolumeClaimVolumeSource(claim *corev1.PersistentVolumeClaimV
 		"    ClaimName:\t%v\n"+
 		"    ReadOnly:\t%v\n",
 		claim.ClaimName, claim.ReadOnly)
+}
+
+func printEphemeralVolumeSource(ephemeral *corev1.EphemeralVolumeSource, w PrefixWriter) {
+	w.Write(LEVEL_2, "Type:\tEphemeralVolume (an inline specification for a volume that gets created and deleted with the pod)\n")
+	if ephemeral.VolumeClaimTemplate != nil {
+		printPersistentVolumeClaim(NewNestedPrefixWriter(w, LEVEL_2),
+			&corev1.PersistentVolumeClaim{
+				ObjectMeta: ephemeral.VolumeClaimTemplate.ObjectMeta,
+				Spec:       ephemeral.VolumeClaimTemplate.Spec,
+			}, false /* not a full PVC */)
+	}
+	w.Write(LEVEL_2, "ReadOnly:\t%v\n", ephemeral.ReadOnly)
 }
 
 func printRBDVolumeSource(rbd *corev1.RBDVolumeSource, w PrefixWriter) {
@@ -1533,39 +1571,7 @@ func getPvcs(volumes []corev1.Volume) []corev1.Volume {
 func describePersistentVolumeClaim(pvc *corev1.PersistentVolumeClaim, events *corev1.EventList, mountPods []corev1.Pod) (string, error) {
 	return tabbedString(func(out io.Writer) error {
 		w := NewPrefixWriter(out)
-		w.Write(LEVEL_0, "Name:\t%s\n", pvc.Name)
-		w.Write(LEVEL_0, "Namespace:\t%s\n", pvc.Namespace)
-		w.Write(LEVEL_0, "StorageClass:\t%s\n", storageutil.GetPersistentVolumeClaimClass(pvc))
-		if pvc.ObjectMeta.DeletionTimestamp != nil {
-			w.Write(LEVEL_0, "Status:\tTerminating (lasts %s)\n", translateTimestampSince(*pvc.ObjectMeta.DeletionTimestamp))
-		} else {
-			w.Write(LEVEL_0, "Status:\t%v\n", pvc.Status.Phase)
-		}
-		w.Write(LEVEL_0, "Volume:\t%s\n", pvc.Spec.VolumeName)
-		printLabelsMultiline(w, "Labels", pvc.Labels)
-		printAnnotationsMultiline(w, "Annotations", pvc.Annotations)
-		w.Write(LEVEL_0, "Finalizers:\t%v\n", pvc.ObjectMeta.Finalizers)
-		storage := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-		capacity := ""
-		accessModes := ""
-		if pvc.Spec.VolumeName != "" {
-			accessModes = storageutil.GetAccessModesAsString(pvc.Status.AccessModes)
-			storage = pvc.Status.Capacity[corev1.ResourceStorage]
-			capacity = storage.String()
-		}
-		w.Write(LEVEL_0, "Capacity:\t%s\n", capacity)
-		w.Write(LEVEL_0, "Access Modes:\t%s\n", accessModes)
-		if pvc.Spec.VolumeMode != nil {
-			w.Write(LEVEL_0, "VolumeMode:\t%v\n", *pvc.Spec.VolumeMode)
-		}
-		if pvc.Spec.DataSource != nil {
-			w.Write(LEVEL_0, "DataSource:\n")
-			if pvc.Spec.DataSource.APIGroup != nil {
-				w.Write(LEVEL_1, "APIGroup:\t%v\n", *pvc.Spec.DataSource.APIGroup)
-			}
-			w.Write(LEVEL_1, "Kind:\t%v\n", pvc.Spec.DataSource.Kind)
-			w.Write(LEVEL_1, "Name:\t%v\n", pvc.Spec.DataSource.Name)
-		}
+		printPersistentVolumeClaim(w, pvc, true)
 		printPodsMultiline(w, "Mounted By", mountPods)
 
 		if len(pvc.Status.Conditions) > 0 {
@@ -1588,6 +1594,50 @@ func describePersistentVolumeClaim(pvc *corev1.PersistentVolumeClaim, events *co
 
 		return nil
 	})
+}
+
+// printPersistentVolumeClaim is used for both PVCs and PersistentVolumeClaimTemplate. For the latter,
+// we need to skip some fields which have no meaning.
+func printPersistentVolumeClaim(w PrefixWriter, pvc *corev1.PersistentVolumeClaim, isFullPVC bool) {
+	if isFullPVC {
+		w.Write(LEVEL_0, "Name:\t%s\n", pvc.Name)
+		w.Write(LEVEL_0, "Namespace:\t%s\n", pvc.Namespace)
+	}
+	w.Write(LEVEL_0, "StorageClass:\t%s\n", storageutil.GetPersistentVolumeClaimClass(pvc))
+	if isFullPVC {
+		if pvc.ObjectMeta.DeletionTimestamp != nil {
+			w.Write(LEVEL_0, "Status:\tTerminating (lasts %s)\n", translateTimestampSince(*pvc.ObjectMeta.DeletionTimestamp))
+		} else {
+			w.Write(LEVEL_0, "Status:\t%v\n", pvc.Status.Phase)
+		}
+	}
+	w.Write(LEVEL_0, "Volume:\t%s\n", pvc.Spec.VolumeName)
+	printLabelsMultiline(w, "Labels", pvc.Labels)
+	printAnnotationsMultiline(w, "Annotations", pvc.Annotations)
+	if isFullPVC {
+		w.Write(LEVEL_0, "Finalizers:\t%v\n", pvc.ObjectMeta.Finalizers)
+	}
+	storage := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	capacity := ""
+	accessModes := ""
+	if pvc.Spec.VolumeName != "" {
+		accessModes = storageutil.GetAccessModesAsString(pvc.Status.AccessModes)
+		storage = pvc.Status.Capacity[corev1.ResourceStorage]
+		capacity = storage.String()
+	}
+	w.Write(LEVEL_0, "Capacity:\t%s\n", capacity)
+	w.Write(LEVEL_0, "Access Modes:\t%s\n", accessModes)
+	if pvc.Spec.VolumeMode != nil {
+		w.Write(LEVEL_0, "VolumeMode:\t%v\n", *pvc.Spec.VolumeMode)
+	}
+	if pvc.Spec.DataSource != nil {
+		w.Write(LEVEL_0, "DataSource:\n")
+		if pvc.Spec.DataSource.APIGroup != nil {
+			w.Write(LEVEL_1, "APIGroup:\t%v\n", *pvc.Spec.DataSource.APIGroup)
+		}
+		w.Write(LEVEL_1, "Kind:\t%v\n", pvc.Spec.DataSource.Kind)
+		w.Write(LEVEL_1, "Name:\t%v\n", pvc.Spec.DataSource.Name)
+	}
 }
 
 func describeContainers(label string, containers []corev1.Container, containerStatuses []corev1.ContainerStatus,
@@ -2343,24 +2393,36 @@ func describeSecret(secret *corev1.Secret) (string, error) {
 }
 
 type IngressDescriber struct {
-	clientset.Interface
+	client clientset.Interface
 }
 
 func (i *IngressDescriber) Describe(namespace, name string, describerSettings DescriberSettings) (string, error) {
-	c := i.NetworkingV1beta1().Ingresses(namespace)
-	ing, err := c.Get(context.TODO(), name, metav1.GetOptions{})
-	if err != nil {
-		return "", err
+	var events *corev1.EventList
+
+	// try ingress/v1 first (v1.19) and fallback to ingress/v1beta if an err occurs
+	netV1, err := i.client.NetworkingV1().Ingresses(namespace).Get(context.TODO(), name, metav1.GetOptions{})
+	if err == nil {
+		if describerSettings.ShowEvents {
+			events, _ = i.client.CoreV1().Events(namespace).Search(scheme.Scheme, netV1)
+		}
+		return i.describeIngressV1(netV1, events)
 	}
-	return i.describeIngress(ing, describerSettings)
+	netV1beta1, err := i.client.NetworkingV1beta1().Ingresses(namespace).Get(context.TODO(), name, metav1.GetOptions{})
+	if err == nil {
+		if describerSettings.ShowEvents {
+			events, _ = i.client.CoreV1().Events(namespace).Search(scheme.Scheme, netV1beta1)
+		}
+		return i.describeIngressV1beta1(netV1beta1, events)
+	}
+	return "", err
 }
 
-func (i *IngressDescriber) describeBackend(ns string, backend *networkingv1beta1.IngressBackend) string {
-	endpoints, err := i.CoreV1().Endpoints(ns).Get(context.TODO(), backend.ServiceName, metav1.GetOptions{})
+func (i *IngressDescriber) describeBackendV1beta1(ns string, backend *networkingv1beta1.IngressBackend) string {
+	endpoints, err := i.client.CoreV1().Endpoints(ns).Get(context.TODO(), backend.ServiceName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Sprintf("<error: %v>", err)
 	}
-	service, err := i.CoreV1().Services(ns).Get(context.TODO(), backend.ServiceName, metav1.GetOptions{})
+	service, err := i.client.CoreV1().Services(ns).Get(context.TODO(), backend.ServiceName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Sprintf("<error: %v>", err)
 	}
@@ -2381,7 +2443,93 @@ func (i *IngressDescriber) describeBackend(ns string, backend *networkingv1beta1
 	return formatEndpoints(endpoints, sets.NewString(spName))
 }
 
-func (i *IngressDescriber) describeIngress(ing *networkingv1beta1.Ingress, describerSettings DescriberSettings) (string, error) {
+func (i *IngressDescriber) describeBackendV1(ns string, backend *networkingv1.IngressBackend) string {
+
+	if backend.Service != nil {
+		sb := serviceBackendStringer(backend.Service)
+		endpoints, err := i.client.CoreV1().Endpoints(ns).Get(context.TODO(), backend.Service.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Sprintf("%v (<error: %v>)", sb, err)
+		}
+		service, err := i.client.CoreV1().Services(ns).Get(context.TODO(), backend.Service.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Sprintf("%v(<error: %v>)", sb, err)
+		}
+		spName := ""
+		for i := range service.Spec.Ports {
+			sp := &service.Spec.Ports[i]
+			if backend.Service.Port.Number != 0 && backend.Service.Port.Number == sp.Port {
+				spName = sp.Name
+			} else if len(backend.Service.Port.Name) > 0 && backend.Service.Port.Name == sp.Name {
+				spName = sp.Name
+			}
+		}
+		ep := formatEndpoints(endpoints, sets.NewString(spName))
+		return fmt.Sprintf("%s\t %s)", sb, ep)
+	}
+	if backend.Resource != nil {
+		ic := backend.Resource
+		return fmt.Sprintf("APIGroup: %v, Kind: %v, Name: %v", *ic.APIGroup, ic.Kind, ic.Name)
+	}
+	return ""
+}
+
+func (i *IngressDescriber) describeIngressV1(ing *networkingv1.Ingress, events *corev1.EventList) (string, error) {
+	return tabbedString(func(out io.Writer) error {
+		w := NewPrefixWriter(out)
+		w.Write(LEVEL_0, "Name:\t%v\n", ing.Name)
+		w.Write(LEVEL_0, "Namespace:\t%v\n", ing.Namespace)
+		w.Write(LEVEL_0, "Address:\t%v\n", loadBalancerStatusStringer(ing.Status.LoadBalancer, true))
+		def := ing.Spec.DefaultBackend
+		ns := ing.Namespace
+		if def == nil {
+			// Ingresses that don't specify a default backend inherit the
+			// default backend in the kube-system namespace.
+			def = &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "default-http-backend",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 80,
+					},
+				},
+			}
+			ns = metav1.NamespaceSystem
+		}
+		w.Write(LEVEL_0, "Default backend:\t%s\n", i.describeBackendV1(ns, def))
+		if len(ing.Spec.TLS) != 0 {
+			describeIngressTLSV1(w, ing.Spec.TLS)
+		}
+		w.Write(LEVEL_0, "Rules:\n  Host\tPath\tBackends\n")
+		w.Write(LEVEL_1, "----\t----\t--------\n")
+		count := 0
+		for _, rules := range ing.Spec.Rules {
+
+			if rules.HTTP == nil {
+				continue
+			}
+			count++
+			host := rules.Host
+			if len(host) == 0 {
+				host = "*"
+			}
+			w.Write(LEVEL_1, "%s\t\n", host)
+			for _, path := range rules.HTTP.Paths {
+				w.Write(LEVEL_2, "\t%s \t%s\n", path.Path, i.describeBackendV1(ing.Namespace, &path.Backend))
+			}
+		}
+		if count == 0 {
+			w.Write(LEVEL_1, "\t%s %s\n", "*", "*", i.describeBackendV1(ns, def))
+		}
+		printAnnotationsMultiline(w, "Annotations", ing.Annotations)
+
+		if events != nil {
+			DescribeEvents(events, w)
+		}
+		return nil
+	})
+}
+
+func (i *IngressDescriber) describeIngressV1beta1(ing *networkingv1beta1.Ingress, events *corev1.EventList) (string, error) {
 	return tabbedString(func(out io.Writer) error {
 		w := NewPrefixWriter(out)
 		w.Write(LEVEL_0, "Name:\t%v\n", ing.Name)
@@ -2398,14 +2546,15 @@ func (i *IngressDescriber) describeIngress(ing *networkingv1beta1.Ingress, descr
 			}
 			ns = metav1.NamespaceSystem
 		}
-		w.Write(LEVEL_0, "Default backend:\t%s (%s)\n", backendStringer(def), i.describeBackend(ns, def))
+		w.Write(LEVEL_0, "Default backend:\t%s (%s)\n", backendStringer(def), i.describeBackendV1beta1(ns, def))
 		if len(ing.Spec.TLS) != 0 {
-			describeIngressTLS(w, ing.Spec.TLS)
+			describeIngressTLSV1beta1(w, ing.Spec.TLS)
 		}
 		w.Write(LEVEL_0, "Rules:\n  Host\tPath\tBackends\n")
 		w.Write(LEVEL_1, "----\t----\t--------\n")
 		count := 0
 		for _, rules := range ing.Spec.Rules {
+
 			if rules.HTTP == nil {
 				continue
 			}
@@ -2416,25 +2565,33 @@ func (i *IngressDescriber) describeIngress(ing *networkingv1beta1.Ingress, descr
 			}
 			w.Write(LEVEL_1, "%s\t\n", host)
 			for _, path := range rules.HTTP.Paths {
-				w.Write(LEVEL_2, "\t%s \t%s (%s)\n", path.Path, backendStringer(&path.Backend), i.describeBackend(ing.Namespace, &path.Backend))
+				w.Write(LEVEL_2, "\t%s \t%s (%s)\n", path.Path, backendStringer(&path.Backend), i.describeBackendV1beta1(ing.Namespace, &path.Backend))
 			}
 		}
 		if count == 0 {
-			w.Write(LEVEL_1, "%s\t%s \t%s (%s)\n", "*", "*", backendStringer(def), i.describeBackend(ns, def))
+			w.Write(LEVEL_1, "%s\t%s \t%s (%s)\n", "*", "*", backendStringer(def), i.describeBackendV1beta1(ns, def))
 		}
 		printAnnotationsMultiline(w, "Annotations", ing.Annotations)
 
-		if describerSettings.ShowEvents {
-			events, _ := i.CoreV1().Events(ing.Namespace).Search(scheme.Scheme, ing)
-			if events != nil {
-				DescribeEvents(events, w)
-			}
+		if events != nil {
+			DescribeEvents(events, w)
 		}
 		return nil
 	})
 }
 
-func describeIngressTLS(w PrefixWriter, ingTLS []networkingv1beta1.IngressTLS) {
+func describeIngressTLSV1beta1(w PrefixWriter, ingTLS []networkingv1beta1.IngressTLS) {
+	w.Write(LEVEL_0, "TLS:\n")
+	for _, t := range ingTLS {
+		if t.SecretName == "" {
+			w.Write(LEVEL_1, "SNI routes %v\n", strings.Join(t.Hosts, ","))
+		} else {
+			w.Write(LEVEL_1, "%v terminates %v\n", t.SecretName, strings.Join(t.Hosts, ","))
+		}
+	}
+}
+
+func describeIngressTLSV1(w PrefixWriter, ingTLS []networkingv1.IngressTLS) {
 	w.Write(LEVEL_0, "TLS:\n")
 	for _, t := range ingTLS {
 		if t.SecretName == "" {
@@ -2446,19 +2603,30 @@ func describeIngressTLS(w PrefixWriter, ingTLS []networkingv1beta1.IngressTLS) {
 }
 
 type IngressClassDescriber struct {
-	clientset.Interface
+	client clientset.Interface
 }
 
 func (i *IngressClassDescriber) Describe(namespace, name string, describerSettings DescriberSettings) (string, error) {
-	c := i.NetworkingV1beta1().IngressClasses()
-	ic, err := c.Get(context.TODO(), name, metav1.GetOptions{})
-	if err != nil {
-		return "", err
+	var events *corev1.EventList
+	// try IngressClass/v1 first (v1.19) and fallback to IngressClass/v1beta if an err occurs
+	netV1, err := i.client.NetworkingV1().IngressClasses().Get(context.TODO(), name, metav1.GetOptions{})
+	if err == nil {
+		if describerSettings.ShowEvents {
+			events, _ = i.client.CoreV1().Events(namespace).Search(scheme.Scheme, netV1)
+		}
+		return i.describeIngressClassV1(netV1, events)
 	}
-	return i.describeIngressClass(ic, describerSettings)
+	netV1beta1, err := i.client.NetworkingV1beta1().IngressClasses().Get(context.TODO(), name, metav1.GetOptions{})
+	if err == nil {
+		if describerSettings.ShowEvents {
+			events, _ = i.client.CoreV1().Events(namespace).Search(scheme.Scheme, netV1beta1)
+		}
+		return i.describeIngressClassV1beta1(netV1beta1, events)
+	}
+	return "", err
 }
 
-func (i *IngressClassDescriber) describeIngressClass(ic *networkingv1beta1.IngressClass, describerSettings DescriberSettings) (string, error) {
+func (i *IngressClassDescriber) describeIngressClassV1beta1(ic *networkingv1beta1.IngressClass, events *corev1.EventList) (string, error) {
 	return tabbedString(func(out io.Writer) error {
 		w := NewPrefixWriter(out)
 		w.Write(LEVEL_0, "Name:\t%s\n", ic.Name)
@@ -2474,7 +2642,32 @@ func (i *IngressClassDescriber) describeIngressClass(ic *networkingv1beta1.Ingre
 			w.Write(LEVEL_1, "Kind:\t%v\n", ic.Spec.Parameters.Kind)
 			w.Write(LEVEL_1, "Name:\t%v\n", ic.Spec.Parameters.Name)
 		}
+		if events != nil {
+			DescribeEvents(events, w)
+		}
+		return nil
+	})
+}
 
+func (i *IngressClassDescriber) describeIngressClassV1(ic *networkingv1.IngressClass, events *corev1.EventList) (string, error) {
+	return tabbedString(func(out io.Writer) error {
+		w := NewPrefixWriter(out)
+		w.Write(LEVEL_0, "Name:\t%s\n", ic.Name)
+		printLabelsMultiline(w, "Labels", ic.Labels)
+		printAnnotationsMultiline(w, "Annotations", ic.Annotations)
+		w.Write(LEVEL_0, "Controller:\t%v\n", ic.Spec.Controller)
+
+		if ic.Spec.Parameters != nil {
+			w.Write(LEVEL_0, "Parameters:\n")
+			if ic.Spec.Parameters.APIGroup != nil {
+				w.Write(LEVEL_1, "APIGroup:\t%v\n", *ic.Spec.Parameters.APIGroup)
+			}
+			w.Write(LEVEL_1, "Kind:\t%v\n", ic.Spec.Parameters.Kind)
+			w.Write(LEVEL_1, "Name:\t%v\n", ic.Spec.Parameters.Name)
+		}
+		if events != nil {
+			DescribeEvents(events, w)
+		}
 		return nil
 	})
 }
@@ -3461,7 +3654,7 @@ func describeHorizontalPodAutoscalerV2beta2(hpa *autoscalingv2beta2.HorizontalPo
 					w.Write(LEVEL_1, "(as a percentage of request):\t%s / %s\n", current, target)
 				}
 			default:
-				w.Write(LEVEL_1, "<unknown metric type %q>", string(metric.Type))
+				w.Write(LEVEL_1, "<unknown metric type %q>\n", string(metric.Type))
 			}
 		}
 		minReplicas := "<unset>"
@@ -3964,7 +4157,7 @@ func printNetworkPolicySpecEgressTo(npers []networkingv1.NetworkPolicyEgressRule
 			}
 		}
 		if len(nper.To) == 0 {
-			w.Write(LEVEL_0, "%s%s\n", initialIndent, "To: <any> (traffic not restricted by source)")
+			w.Write(LEVEL_0, "%s%s\n", initialIndent, "To: <any> (traffic not restricted by destination)")
 		} else {
 			for _, to := range nper.To {
 				w.Write(LEVEL_0, "%s%s\n", initialIndent, "To:")
@@ -4894,6 +5087,21 @@ func extractCSRStatus(conditions []string, certificateBytes []byte) string {
 		status += ",Issued"
 	}
 	return status
+}
+
+// backendStringer behaves just like a string interface and converts the given backend to a string.
+func serviceBackendStringer(backend *networkingv1.IngressServiceBackend) string {
+	if backend == nil {
+		return ""
+	}
+	var bPort string
+	if backend.Port.Number != 0 {
+		sNum := int64(backend.Port.Number)
+		bPort = strconv.FormatInt(sNum, 10)
+	} else {
+		bPort = backend.Port.Name
+	}
+	return fmt.Sprintf("%v:%v", backend.Name, bPort)
 }
 
 // backendStringer behaves just like a string interface and converts the given backend to a string.

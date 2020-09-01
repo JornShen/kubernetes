@@ -118,6 +118,7 @@ func (p *azureDiskProvisioner) Provision(selectedNode *v1.Node, allowedTopologie
 		diskIopsReadWrite   string
 		diskMbpsReadWrite   string
 		diskEncryptionSetID string
+		customTags          string
 
 		maxShares int
 	)
@@ -164,6 +165,8 @@ func (p *azureDiskProvisioner) Provision(selectedNode *v1.Node, allowedTopologie
 			diskMbpsReadWrite = v
 		case "diskencryptionsetid":
 			diskEncryptionSetID = v
+		case "tags":
+			customTags = v
 		case azure.WriteAcceleratorEnabled:
 			writeAcceleratorEnabled = v
 		case "maxshares":
@@ -261,9 +264,14 @@ func (p *azureDiskProvisioner) Provision(selectedNode *v1.Node, allowedTopologie
 	diskURI := ""
 	labels := map[string]string{}
 	if kind == v1.AzureManagedDisk {
-		tags := make(map[string]string)
+		tags, err := azure.ConvertTagsToMap(customTags)
+		if err != nil {
+			return nil, err
+		}
 		if p.options.CloudTags != nil {
-			tags = *(p.options.CloudTags)
+			for k, v := range *(p.options.CloudTags) {
+				tags[k] = v
+			}
 		}
 		if strings.EqualFold(writeAcceleratorEnabled, "true") {
 			tags[azure.WriteAcceleratorEnabled] = "true"
@@ -290,7 +298,7 @@ func (p *azureDiskProvisioner) Provision(selectedNode *v1.Node, allowedTopologie
 		if err != nil {
 			return nil, err
 		}
-	} else {
+	} else { // Attention: blob disk feature is deprecated
 		if kind == v1.AzureDedicatedBlobDisk {
 			_, diskURI, _, err = diskController.CreateVolume(name, account, storageAccountType, location, requestGiB)
 			if err != nil {

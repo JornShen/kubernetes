@@ -69,6 +69,13 @@ func isNLB(annotations map[string]string) bool {
 	return false
 }
 
+func isLBExternal(annotations map[string]string) bool {
+	if val := annotations[ServiceAnnotationLoadBalancerType]; val == "nlb-ip" || val == "external" {
+		return true
+	}
+	return false
+}
+
 type nlbPortMapping struct {
 	FrontendPort     int64
 	FrontendProtocol string
@@ -185,9 +192,12 @@ func (c *Cloud) ensureLoadBalancerv2(namespacedName types.NamespacedName, loadBa
 			}
 
 			// actual maps FrontendPort to an elbv2.Listener
-			actual := map[int64]*elbv2.Listener{}
+			actual := map[int64]map[string]*elbv2.Listener{}
 			for _, listener := range listenerDescriptions.Listeners {
-				actual[*listener.Port] = listener
+				if actual[*listener.Port] == nil {
+					actual[*listener.Port] = map[string]*elbv2.Listener{}
+				}
+				actual[*listener.Port][*listener.Protocol] = listener
 			}
 
 			actualTargetGroups, err := c.elbv2.DescribeTargetGroups(
@@ -207,10 +217,11 @@ func (c *Cloud) ensureLoadBalancerv2(namespacedName types.NamespacedName, loadBa
 			// Handle additions/modifications
 			for _, mapping := range mappings {
 				frontendPort := mapping.FrontendPort
+				frontendProtocol := mapping.FrontendProtocol
 				nodePort := mapping.TrafficPort
 
 				// modifications
-				if listener, ok := actual[frontendPort]; ok {
+				if listener, ok := actual[frontendPort][frontendProtocol]; ok {
 					listenerNeedsModification := false
 
 					if aws.StringValue(listener.Protocol) != mapping.FrontendProtocol {
@@ -315,23 +326,27 @@ func (c *Cloud) ensureLoadBalancerv2(namespacedName types.NamespacedName, loadBa
 				dirty = true
 			}
 
-			frontEndPorts := map[int64]bool{}
+			frontEndPorts := map[int64]map[string]bool{}
 			for i := range mappings {
-				frontEndPorts[mappings[i].FrontendPort] = true
+				if frontEndPorts[mappings[i].FrontendPort] == nil {
+					frontEndPorts[mappings[i].FrontendPort] = map[string]bool{}
+				}
+				frontEndPorts[mappings[i].FrontendPort][mappings[i].FrontendProtocol] = true
 			}
 
 			// handle deletions
-			for port, listener := range actual {
-				if _, ok := frontEndPorts[port]; !ok {
-					err := c.deleteListenerV2(listener)
-					if err != nil {
-						return nil, err
+			for port := range actual {
+				for protocol := range actual[port] {
+					if _, ok := frontEndPorts[port][protocol]; !ok {
+						err := c.deleteListenerV2(actual[port][protocol])
+						if err != nil {
+							return nil, err
+						}
+						dirty = true
 					}
-					dirty = true
 				}
 			}
 		}
-
 		if err := c.reconcileLBAttributes(aws.StringValue(loadBalancer.LoadBalancerArn), annotations); err != nil {
 			return nil, err
 		}
@@ -708,27 +723,9 @@ func (c *Cloud) ensureTargetGroup(targetGroup *elbv2.TargetGroup, serviceName ty
 	return targetGroup, nil
 }
 
-func (c *Cloud) getVpcCidrBlocks() ([]string, error) {
-	vpcs, err := c.ec2.DescribeVpcs(&ec2.DescribeVpcsInput{
-		VpcIds: []*string{aws.String(c.vpcID)},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("error querying VPC for ELB: %q", err)
-	}
-	if len(vpcs.Vpcs) != 1 {
-		return nil, fmt.Errorf("error querying VPC for ELB, got %d vpcs for %s", len(vpcs.Vpcs), c.vpcID)
-	}
-
-	cidrBlocks := make([]string, 0, len(vpcs.Vpcs[0].CidrBlockAssociationSet))
-	for _, cidr := range vpcs.Vpcs[0].CidrBlockAssociationSet {
-		cidrBlocks = append(cidrBlocks, aws.StringValue(cidr.CidrBlock))
-	}
-	return cidrBlocks, nil
-}
-
 // updateInstanceSecurityGroupsForNLB will adjust securityGroup's settings to allow inbound traffic into instances from clientCIDRs and portMappings.
 // TIP: if either instances or clientCIDRs or portMappings are nil, then the securityGroup rules for lbName are cleared.
-func (c *Cloud) updateInstanceSecurityGroupsForNLB(lbName string, instances map[InstanceID]*ec2.Instance, clientCIDRs []string, portMappings []nlbPortMapping) error {
+func (c *Cloud) updateInstanceSecurityGroupsForNLB(lbName string, instances map[InstanceID]*ec2.Instance, subnetCIDRs []string, clientCIDRs []string, portMappings []nlbPortMapping) error {
 	if c.cfg.Global.DisableSecurityGroupIngress {
 		return nil
 	}
@@ -765,31 +762,31 @@ func (c *Cloud) updateInstanceSecurityGroupsForNLB(lbName string, instances map[
 
 	{
 		clientPorts := sets.Int64{}
+		clientProtocol := "tcp"
 		healthCheckPorts := sets.Int64{}
 		for _, port := range portMappings {
 			clientPorts.Insert(port.TrafficPort)
 			healthCheckPorts.Insert(port.HealthCheckPort)
+			if port.TrafficProtocol == string(v1.ProtocolUDP) {
+				clientProtocol = "udp"
+			}
 		}
 		clientRuleAnnotation := fmt.Sprintf("%s=%s", NLBClientRuleDescription, lbName)
 		healthRuleAnnotation := fmt.Sprintf("%s=%s", NLBHealthCheckRuleDescription, lbName)
-		vpcCIDRs, err := c.getVpcCidrBlocks()
-		if err != nil {
-			return err
-		}
 		for sgID, sg := range clusterSGs {
 			sgPerms := NewIPPermissionSet(sg.IpPermissions...).Ungroup()
 			if desiredSGIDs.Has(sgID) {
-				if err := c.updateInstanceSecurityGroupForNLBTraffic(sgID, sgPerms, healthRuleAnnotation, "tcp", healthCheckPorts, vpcCIDRs); err != nil {
+				if err := c.updateInstanceSecurityGroupForNLBTraffic(sgID, sgPerms, healthRuleAnnotation, "tcp", healthCheckPorts, subnetCIDRs); err != nil {
 					return err
 				}
-				if err := c.updateInstanceSecurityGroupForNLBTraffic(sgID, sgPerms, clientRuleAnnotation, "tcp", clientPorts, clientCIDRs); err != nil {
+				if err := c.updateInstanceSecurityGroupForNLBTraffic(sgID, sgPerms, clientRuleAnnotation, clientProtocol, clientPorts, clientCIDRs); err != nil {
 					return err
 				}
 			} else {
 				if err := c.updateInstanceSecurityGroupForNLBTraffic(sgID, sgPerms, healthRuleAnnotation, "tcp", nil, nil); err != nil {
 					return err
 				}
-				if err := c.updateInstanceSecurityGroupForNLBTraffic(sgID, sgPerms, clientRuleAnnotation, "tcp", nil, nil); err != nil {
+				if err := c.updateInstanceSecurityGroupForNLBTraffic(sgID, sgPerms, clientRuleAnnotation, clientProtocol, nil, nil); err != nil {
 					return err
 				}
 			}

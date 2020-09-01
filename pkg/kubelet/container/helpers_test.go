@@ -24,7 +24,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
@@ -43,7 +43,7 @@ func TestEnvVarsToMap(t *testing.T) {
 		},
 	}
 
-	varMap := EnvVarsToMap(vars)
+	varMap := envVarsToMap(vars)
 
 	if e, a := len(vars), len(varMap); e != a {
 		t.Errorf("Unexpected map length; expected: %d, got %d", e, a)
@@ -414,7 +414,7 @@ func TestShouldContainerBeRestarted(t *testing.T) {
 		ID:        pod.UID,
 		Name:      pod.Name,
 		Namespace: pod.Namespace,
-		ContainerStatuses: []*ContainerStatus{
+		ContainerStatuses: []*Status{
 			{
 				Name:  "alive",
 				State: ContainerStateRunning,
@@ -558,9 +558,8 @@ func TestMakePortMappings(t *testing.T) {
 			HostIP:        ip,
 		}
 	}
-	portMapping := func(name string, protocol v1.Protocol, containerPort, hostPort int, ip string) PortMapping {
+	portMapping := func(protocol v1.Protocol, containerPort, hostPort int, ip string) PortMapping {
 		return PortMapping{
-			Name:          name,
 			Protocol:      protocol,
 			ContainerPort: containerPort,
 			HostPort:      hostPort,
@@ -590,11 +589,11 @@ func TestMakePortMappings(t *testing.T) {
 				},
 			},
 			[]PortMapping{
-				portMapping("fooContainer-v4-TCP:80", v1.ProtocolTCP, 80, 8080, "127.0.0.1"),
-				portMapping("fooContainer-v4-TCP:443", v1.ProtocolTCP, 443, 4343, "192.168.0.1"),
-				portMapping("fooContainer-foo", v1.ProtocolUDP, 555, 5555, ""),
-				portMapping("fooContainer-v6-TCP:80", v1.ProtocolTCP, 80, 8080, "::"),
-				portMapping("fooContainer-any-TCP:1234", v1.ProtocolTCP, 1234, 5678, ""),
+				portMapping(v1.ProtocolTCP, 80, 8080, "127.0.0.1"),
+				portMapping(v1.ProtocolTCP, 443, 4343, "192.168.0.1"),
+				portMapping(v1.ProtocolUDP, 555, 5555, ""),
+				portMapping(v1.ProtocolTCP, 80, 8080, "::"),
+				portMapping(v1.ProtocolTCP, 1234, 5678, ""),
 			},
 		},
 	}

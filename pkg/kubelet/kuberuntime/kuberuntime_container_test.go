@@ -19,6 +19,7 @@ package kuberuntime
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -65,12 +66,25 @@ func TestRemoveContainer(t *testing.T) {
 
 	containerID := fakeContainers[0].Id
 	fakeOS := m.osInterface.(*containertest.FakeOS)
+	fakeOS.GlobFn = func(pattern, path string) bool {
+		pattern = strings.Replace(pattern, "*", ".*", -1)
+		return regexp.MustCompile(pattern).MatchString(path)
+	}
+	expectedContainerLogPath := filepath.Join(podLogsRootDirectory, "new_bar_12345678", "foo", "0.log")
+	expectedContainerLogPathRotated := filepath.Join(podLogsRootDirectory, "new_bar_12345678", "foo", "0.log.20060102-150405")
+	expectedContainerLogSymlink := legacyLogSymlink(containerID, "foo", "bar", "new")
+
+	fakeOS.Create(expectedContainerLogPath)
+	fakeOS.Create(expectedContainerLogPathRotated)
+
 	err = m.removeContainer(containerID)
 	assert.NoError(t, err)
-	// Verify container log is removed
-	expectedContainerLogPath := filepath.Join(podLogsRootDirectory, "new_bar_12345678", "foo", "0.log")
-	expectedContainerLogSymlink := legacyLogSymlink(containerID, "foo", "bar", "new")
-	assert.Equal(t, fakeOS.Removes, []string{expectedContainerLogPath, expectedContainerLogSymlink})
+
+	// Verify container log is removed.
+	// We could not predict the order of `fakeOS.Removes`, so we use `assert.ElementsMatch` here.
+	assert.ElementsMatch(t,
+		[]string{expectedContainerLogSymlink, expectedContainerLogPath, expectedContainerLogPathRotated},
+		fakeOS.Removes)
 	// Verify container is removed
 	assert.Contains(t, fakeRuntime.Called, "RemoveContainer")
 	containers, err := fakeRuntime.ListContainers(&runtimeapi.ContainerFilter{Id: containerID})
@@ -128,7 +142,7 @@ func TestToKubeContainerStatus(t *testing.T) {
 
 	for desc, test := range map[string]struct {
 		input    *runtimeapi.ContainerStatus
-		expected *kubecontainer.ContainerStatus
+		expected *kubecontainer.Status
 	}{
 		"created container": {
 			input: &runtimeapi.ContainerStatus{
@@ -138,7 +152,7 @@ func TestToKubeContainerStatus(t *testing.T) {
 				State:     runtimeapi.ContainerState_CONTAINER_CREATED,
 				CreatedAt: createdAt,
 			},
-			expected: &kubecontainer.ContainerStatus{
+			expected: &kubecontainer.Status{
 				ID:        *cid,
 				Image:     imageSpec.Image,
 				State:     kubecontainer.ContainerStateCreated,
@@ -154,7 +168,7 @@ func TestToKubeContainerStatus(t *testing.T) {
 				CreatedAt: createdAt,
 				StartedAt: startedAt,
 			},
-			expected: &kubecontainer.ContainerStatus{
+			expected: &kubecontainer.Status{
 				ID:        *cid,
 				Image:     imageSpec.Image,
 				State:     kubecontainer.ContainerStateRunning,
@@ -175,7 +189,7 @@ func TestToKubeContainerStatus(t *testing.T) {
 				Reason:     "GotKilled",
 				Message:    "The container was killed",
 			},
-			expected: &kubecontainer.ContainerStatus{
+			expected: &kubecontainer.Status{
 				ID:         *cid,
 				Image:      imageSpec.Image,
 				State:      kubecontainer.ContainerStateExited,
@@ -196,7 +210,7 @@ func TestToKubeContainerStatus(t *testing.T) {
 				CreatedAt: createdAt,
 				StartedAt: startedAt,
 			},
-			expected: &kubecontainer.ContainerStatus{
+			expected: &kubecontainer.Status{
 				ID:        *cid,
 				Image:     imageSpec.Image,
 				State:     kubecontainer.ContainerStateUnknown,
@@ -316,7 +330,7 @@ func TestLifeCycleHook(t *testing.T) {
 		testPod.Spec.Containers[0].Lifecycle = cmdPostStart
 		testContainer := &testPod.Spec.Containers[0]
 		fakePodStatus := &kubecontainer.PodStatus{
-			ContainerStatuses: []*kubecontainer.ContainerStatus{
+			ContainerStatuses: []*kubecontainer.Status{
 				{
 					ID: kubecontainer.ContainerID{
 						Type: "docker",
@@ -342,7 +356,7 @@ func TestLifeCycleHook(t *testing.T) {
 
 func TestStartSpec(t *testing.T) {
 	podStatus := &kubecontainer.PodStatus{
-		ContainerStatuses: []*kubecontainer.ContainerStatus{
+		ContainerStatuses: []*kubecontainer.Status{
 			{
 				ID: kubecontainer.ContainerID{
 					Type: "docker",

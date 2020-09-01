@@ -24,12 +24,12 @@ set -o nounset
 set -o pipefail
 
 ### Hardcoded constants
-DEFAULT_CNI_VERSION="v0.8.6"
-DEFAULT_CNI_SHA1="a31251105250279fe57b4474d91d2db1d4d48b5a"
+DEFAULT_CNI_VERSION="v0.8.7"
+DEFAULT_CNI_SHA1="96a30cb67e33da95fb1d99f93dd787c2a3c08627"
 DEFAULT_NPD_VERSION="v0.8.0"
 DEFAULT_NPD_SHA1="9406c975b1b035995a137029a004622b905b4e7f"
-DEFAULT_CRICTL_VERSION="v1.18.0"
-DEFAULT_CRICTL_SHA1="f384f594bd0a7e558a827363f54f58b45e670075"
+DEFAULT_CRICTL_VERSION="v1.19.0"
+DEFAULT_CRICTL_SHA1="bc9d57377402c2cc36ca5e600d55de96b15953de"
 DEFAULT_MOUNTER_TAR_SHA="8003b798cf33c7f91320cd6ee5cec4fa22244571"
 ###
 
@@ -376,9 +376,18 @@ function try-load-docker-image {
   set +e
   local -r max_attempts=5
   local -i attempt_num=1
-  until timeout 30 ${LOAD_IMAGE_COMMAND:-docker load -i} "${img}"; do
+
+  if [[ "${CONTAINER_RUNTIME_NAME:-}" == "docker" ]]; then
+    load_image_command=${LOAD_IMAGE_COMMAND:-docker load -i}
+  elif [[ "${CONTAINER_RUNTIME_NAME:-}" == "containerd" || "${CONTAINERD_TEST:-}"  == "containerd" ]]; then
+    load_image_command=${LOAD_IMAGE_COMMAND:-ctr -n=k8s.io images import}
+  else
+    load_image_command="${LOAD_IMAGE_COMMAND:-}"
+  fi
+
+  until timeout 30 ${load_image_command} "${img}"; do
     if [[ "${attempt_num}" == "${max_attempts}" ]]; then
-      echo "Fail to load docker image file ${img} after ${max_attempts} retries. Exit!!"
+      echo "Fail to load docker image file ${img} using ${load_image_command} after ${max_attempts} retries. Exit!!"
       exit 1
     else
       attempt_num=$((attempt_num+1))
@@ -423,12 +432,7 @@ function install-docker {
     software-properties-common \
     lsb-release
 
-  # focal repo for docker is not yet available, so we use bonic for now
-  # https://github.com/kubernetes/kubernetes/issues/90709
   release=$(lsb_release -cs)
-  if [ "$release" == "focal" ]; then
-    release="bionic";
-  fi
 
   # Add the Docker apt-repository
   curl -fsSL https://download.docker.com/linux/$(. /etc/os-release; echo "$ID")/gpg \
@@ -469,12 +473,7 @@ function install-containerd-ubuntu {
     software-properties-common \
     lsb-release
 
-  # focal repo for docker is not yet available, so we use bonic for now
-  # https://github.com/kubernetes/kubernetes/issues/90709
   release=$(lsb_release -cs)
-  if [ "$release" == "focal" ]; then
-    release="bionic";
-  fi
 
   # Add the Docker apt-repository (as we install containerd from there)
   curl -fsSL https://download.docker.com/linux/$(. /etc/os-release; echo "$ID")/gpg \
@@ -491,7 +490,10 @@ function install-containerd-ubuntu {
   # Override to latest versions of containerd and runc
   systemctl stop containerd
   if [[ ! -z "${UBUNTU_INSTALL_CONTAINERD_VERSION:-}" ]]; then
-    curl -fsSL "https://github.com/containerd/containerd/releases/download/${UBUNTU_INSTALL_CONTAINERD_VERSION}/containerd-${UBUNTU_INSTALL_CONTAINERD_VERSION:1}.linux-amd64.tar.gz" | tar --overwrite -xzv -C /usr/
+    # containerd versions have slightly different url(s), so try both
+    ( curl -fsSL "https://github.com/containerd/containerd/releases/download/${UBUNTU_INSTALL_CONTAINERD_VERSION}/containerd-${UBUNTU_INSTALL_CONTAINERD_VERSION:1}-linux-amd64.tar.gz" || \
+      curl -fsSL "https://github.com/containerd/containerd/releases/download/${UBUNTU_INSTALL_CONTAINERD_VERSION}/containerd-${UBUNTU_INSTALL_CONTAINERD_VERSION:1}.linux-amd64.tar.gz" ) \
+    | tar --overwrite -xzv -C /usr/
   fi
   if [[ ! -z "${UBUNTU_INSTALL_RUNC_VERSION:-}" ]]; then
     curl -fsSL "https://github.com/opencontainers/runc/releases/download/${UBUNTU_INSTALL_RUNC_VERSION}/runc.amd64" --output /usr/sbin/runc && chmod 755 /usr/sbin/runc

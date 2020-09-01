@@ -47,14 +47,14 @@ const maxProbeRetries = 3
 // Prober helps to check the liveness/readiness/startup of a container.
 type prober struct {
 	exec execprobe.Prober
-	// probe types needs different httprobe instances so they don't
-	// share a connection pool which can cause collsions to the
+	// probe types needs different httpprobe instances so they don't
+	// share a connection pool which can cause collisions to the
 	// same host:port and transient failures. See #49740.
 	readinessHTTP httpprobe.Prober
 	livenessHTTP  httpprobe.Prober
 	startupHTTP   httpprobe.Prober
 	tcp           tcpprobe.Prober
-	runner        kubecontainer.ContainerCommandRunner
+	runner        kubecontainer.CommandRunner
 
 	recorder record.EventRecorder
 }
@@ -62,7 +62,7 @@ type prober struct {
 // NewProber creates a Prober, it takes a command runner and
 // several container info managers.
 func newProber(
-	runner kubecontainer.ContainerCommandRunner,
+	runner kubecontainer.CommandRunner,
 	recorder record.EventRecorder) *prober {
 
 	const followNonLocalRedirects = false

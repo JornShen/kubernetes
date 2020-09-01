@@ -115,6 +115,9 @@ type NodeResizeOptions struct {
 	// it would be location where volume was mounted for the pod
 	DeviceMountPath string
 
+	// DeviceStagingPath stores location where the volume is staged
+	DeviceStagePath string
+
 	NewSize resource.Quantity
 	OldSize resource.Quantity
 
@@ -351,6 +354,8 @@ type AttachDetachVolumeHost interface {
 	// CSIDriverLister returns the informer lister for the CSIDriver API Object
 	CSIDriverLister() storagelistersv1.CSIDriverLister
 
+	// VolumeAttachmentLister returns the informer lister for the VolumeAttachment API Object
+	VolumeAttachmentLister() storagelistersv1.VolumeAttachmentLister
 	// IsAttachDetachController is an interface marker to strictly tie AttachDetachVolumeHost
 	// to the attachDetachController
 	IsAttachDetachController() bool

@@ -84,8 +84,11 @@ function start-kube-apiserver {
   params+=" --tls-private-key-file=${APISERVER_SERVER_KEY_PATH}"
   if [[ -n "${OLD_MASTER_IP:-}" ]]; then
     local old_ips="${OLD_MASTER_IP}"
-    if [[ -n "${OLD_LOAD_BALANCER_IP}" ]]; then
+    if [[ -n "${OLD_LOAD_BALANCER_IP:-}" ]]; then
       old_ips+=",${OLD_LOAD_BALANCER_IP}"
+    fi
+    if [[ -n "${OLD_PRIVATE_VIP:-}" ]]; then
+      old_ips+=",${OLD_PRIVATE_VIP}"
     fi
     params+=" --tls-sni-cert-key=${OLD_MASTER_CERT_PATH},${OLD_MASTER_KEY_PATH}:${old_ips}"
   fi
@@ -260,9 +263,6 @@ function start-kube-apiserver {
   fi
   if [[ -n "${FEATURE_GATES:-}" ]]; then
     params+=" --feature-gates=${FEATURE_GATES}"
-  fi
-  if [[ "${FEATURE_GATES:-}" =~ "RuntimeClass=true" ]]; then
-    params+=" --runtime-config=node.k8s.io/v1alpha1=true"
   fi
   if [[ -n "${MASTER_ADVERTISE_ADDRESS:-}" ]]; then
     params+=" --advertise-address=${MASTER_ADVERTISE_ADDRESS}"

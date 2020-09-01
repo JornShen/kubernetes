@@ -200,6 +200,13 @@ kube::util::find-binary-for-platform() {
     "${KUBE_ROOT}/_output/local/bin/${platform}/${lookfor}"
     "${KUBE_ROOT}/platforms/${platform}/${lookfor}"
   )
+  # if we're looking for the host platform, add local non-platform-qualified search paths
+  if [[ "${platform}" = "$(kube::util::host_platform)" ]]; then
+    locations+=(
+      "${KUBE_ROOT}/_output/local/go/bin/${lookfor}"
+      "${KUBE_ROOT}/_output/dockerized/go/bin/${lookfor}"
+    );
+  fi
   # Also search for binary in bazel build tree.
   # The bazel go rules place some binaries in subtrees like
   # "bazel-bin/source/path/linux_amd64_pure_stripped/binaryname", so make sure
@@ -213,7 +220,7 @@ kube::util::find-binary-for-platform() {
     locations+=("$location");
   done < <(find "${KUBE_ROOT}/bazel-bin/" -type f -perm -111 \
     \( -path "*/${platform/\//_}*/${lookfor}" -o -path "*/${lookfor}" \) 2>/dev/null || true)
-  
+
   # List most recently-updated location.
   local -r bin=$( (ls -t "${locations[@]}" 2>/dev/null || true) | head -1 )
   echo -n "${bin}"
@@ -450,6 +457,22 @@ function kube::util::test_openssl_installed {
     fi
 
     OPENSSL_BIN=$(command -v openssl)
+}
+
+# Query the API server for client certificate authentication capabilities
+function kube::util::test_client_certificate_authentication_enabled {
+  local output
+  kube::util::test_openssl_installed
+
+  output=$(echo \
+    | "${OPENSSL_BIN}" s_client -connect "127.0.0.1:${SECURE_API_PORT}" 2> /dev/null \
+    | grep -A3 'Acceptable client certificate CA names')
+
+  if [[ "${output}" != *"/CN=127.0.0.1"* ]] && [[ "${output}" != *"CN = 127.0.0.1"* ]]; then
+    echo "API server not configured for client certificate authentication"
+    echo "Output of from acceptable client certificate check: ${output}"
+    exit 1
+  fi
 }
 
 # creates a client CA, args are sudo, dest-dir, ca-id, purpose

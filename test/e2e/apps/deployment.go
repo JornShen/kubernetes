@@ -44,6 +44,7 @@ import (
 	deploymentutil "k8s.io/kubernetes/pkg/controller/deployment/util"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2edeployment "k8s.io/kubernetes/test/e2e/framework/deployment"
+	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	e2ereplicaset "k8s.io/kubernetes/test/e2e/framework/replicaset"
 	e2eresource "k8s.io/kubernetes/test/e2e/framework/resource"
@@ -83,6 +84,7 @@ var _ = SIGDescribe("Deployment", func() {
 		testDeleteDeployment(f)
 	})
 	/*
+	  Release: v1.12
 	  Testname: Deployment RollingUpdate
 	  Description: A conformant Kubernetes distribution MUST support the Deployment with RollingUpdate strategy.
 	*/
@@ -90,6 +92,7 @@ var _ = SIGDescribe("Deployment", func() {
 		testRollingUpdateDeployment(f)
 	})
 	/*
+	  Release: v1.12
 	  Testname: Deployment Recreate
 	  Description: A conformant Kubernetes distribution MUST support the Deployment with Recreate strategy.
 	*/
@@ -97,6 +100,7 @@ var _ = SIGDescribe("Deployment", func() {
 		testRecreateDeployment(f)
 	})
 	/*
+	  Release: v1.12
 	  Testname: Deployment RevisionHistoryLimit
 	  Description: A conformant Kubernetes distribution MUST clean up Deployment's ReplicaSets based on
 	  the Deployment's `.spec.revisionHistoryLimit`.
@@ -105,6 +109,7 @@ var _ = SIGDescribe("Deployment", func() {
 		testDeploymentCleanUpPolicy(f)
 	})
 	/*
+	  Release: v1.12
 	  Testname: Deployment Rollover
 	  Description: A conformant Kubernetes distribution MUST support Deployment rollover,
 	    i.e. allow arbitrary number of changes to desired state during rolling update
@@ -120,6 +125,7 @@ var _ = SIGDescribe("Deployment", func() {
 		testDeploymentsControllerRef(f)
 	})
 	/*
+	  Release: v1.12
 	  Testname: Deployment Proportional Scaling
 	  Description: A conformant Kubernetes distribution MUST support Deployment
 	    proportional scaling, i.e. proportionally scale a Deployment's ReplicaSets
@@ -130,6 +136,9 @@ var _ = SIGDescribe("Deployment", func() {
 	})
 	ginkgo.It("should not disrupt a cloud load-balancer's connectivity during rollout", func() {
 		e2eskipper.SkipUnlessProviderIs("aws", "azure", "gce", "gke")
+		nodes, err := e2enode.GetReadySchedulableNodes(c)
+		framework.ExpectNoError(err)
+		e2eskipper.SkipUnlessAtLeast(len(nodes.Items), 3, "load-balancer test requires at least 3 schedulable nodes")
 		testRollingUpdateDeploymentWithLocalTrafficLoadBalancer(f)
 	})
 	// TODO: add tests that cover deployment.Spec.MinReadySeconds once we solved clock-skew issues
@@ -378,7 +387,7 @@ func testDeploymentCleanUpPolicy(f *framework.Framework) {
 		numPodCreation := 1
 		for {
 			select {
-			case event, _ := <-w.ResultChan():
+			case event := <-w.ResultChan():
 				if event.Type != watch.Added {
 					continue
 				}
@@ -455,6 +464,7 @@ func testRolloverDeployment(f *framework.Framework) {
 	framework.Logf("Make sure deployment %q performs scaling operations", deploymentName)
 	// Make sure the deployment starts to scale up and down replica sets by checking if its updated replicas >= 1
 	err = waitForDeploymentUpdatedReplicasGTE(c, ns, deploymentName, deploymentReplicas, deployment.Generation)
+	framework.ExpectNoError(err)
 	// Check if it's updated to revision 1 correctly
 	framework.Logf("Check revision of new replica set for deployment %q", deploymentName)
 	err = checkDeploymentRevisionAndImage(c, ns, deploymentName, "1", deploymentImage)
@@ -626,6 +636,7 @@ func testIterativeDeployments(f *framework.Framework) {
 		deployment, err = e2edeployment.UpdateDeploymentWithRetries(c, ns, deployment.Name, func(update *appsv1.Deployment) {
 			update.Spec.Paused = false
 		})
+		framework.ExpectNoError(err)
 	}
 
 	framework.Logf("Waiting for deployment %q to be observed by the controller", deploymentName)
@@ -799,7 +810,7 @@ func testProportionalScalingDeployment(f *framework.Framework) {
 	// Scale the deployment to 30 replicas.
 	newReplicas = int32(30)
 	framework.Logf("Scaling up the deployment %q from %d to %d", deploymentName, replicas, newReplicas)
-	deployment, err = e2edeployment.UpdateDeploymentWithRetries(c, ns, deployment.Name, func(update *appsv1.Deployment) {
+	_, err = e2edeployment.UpdateDeploymentWithRetries(c, ns, deployment.Name, func(update *appsv1.Deployment) {
 		update.Spec.Replicas = &newReplicas
 	})
 	framework.ExpectNoError(err)

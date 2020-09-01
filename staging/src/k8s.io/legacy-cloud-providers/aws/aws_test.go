@@ -681,23 +681,6 @@ func TestNodeAddressesWithMetadata(t *testing.T) {
 	}
 }
 
-func TestInstanceMetadataByProviderID(t *testing.T) {
-	instance0 := makeInstance(0, "192.168.0.1", "1.2.3.4", "instance-same.ec2.internal", "instance-same.ec2.external", true)
-	aws1, _ := mockInstancesResp(&instance0, []*ec2.Instance{&instance0})
-	// change node name so it uses the instance instead of metadata
-	aws1.selfAWSInstance.nodeName = "foo"
-
-	md, err := aws1.InstanceMetadataByProviderID(context.TODO(), "/us-east-1a/i-0")
-	if err != nil {
-		t.Errorf("should not error when instance found")
-	}
-	if md.ProviderID != "/us-east-1a/i-0" || md.Type != "c3.large" {
-		t.Errorf("expect providerID %s get %s, expect type %s get %s", "/us-east-1a/i-0", md.ProviderID, "c3.large", md.Type)
-	}
-	testHasNodeAddress(t, md.NodeAddresses, v1.NodeInternalIP, "192.168.0.1")
-	testHasNodeAddress(t, md.NodeAddresses, v1.NodeExternalIP, "1.2.3.4")
-}
-
 func TestParseMetadataLocalHostname(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1369,6 +1352,53 @@ func TestDescribeLoadBalancerOnEnsure(t *testing.T) {
 	awsServices.elb.(*MockedFakeELB).expectDescribeLoadBalancers("aid")
 
 	c.EnsureLoadBalancer(context.TODO(), TestClusterName, &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "myservice", UID: "id"}}, []*v1.Node{})
+}
+
+func TestCheckProtocol(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		port        v1.ServicePort
+		wantErr     error
+	}{
+		{
+			name:        "TCP with ELB",
+			annotations: make(map[string]string),
+			port:        v1.ServicePort{Protocol: v1.ProtocolTCP, Port: int32(8080)},
+			wantErr:     nil,
+		},
+		{
+			name:        "TCP with NLB",
+			annotations: map[string]string{ServiceAnnotationLoadBalancerType: "nlb"},
+			port:        v1.ServicePort{Protocol: v1.ProtocolTCP, Port: int32(8080)},
+			wantErr:     nil,
+		},
+		{
+			name:        "UDP with ELB",
+			annotations: make(map[string]string),
+			port:        v1.ServicePort{Protocol: v1.ProtocolUDP, Port: int32(8080)},
+			wantErr:     fmt.Errorf("Protocol UDP not supported by load balancer"),
+		},
+		{
+			name:        "UDP with NLB",
+			annotations: map[string]string{ServiceAnnotationLoadBalancerType: "nlb"},
+			port:        v1.ServicePort{Protocol: v1.ProtocolUDP, Port: int32(8080)},
+			wantErr:     nil,
+		},
+	}
+	for _, test := range tests {
+		tt := test
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := checkProtocol(tt.port, tt.annotations)
+			if tt.wantErr != nil && err == nil {
+				t.Errorf("Expected error: want=%s got =%s", tt.wantErr, err)
+			}
+			if tt.wantErr == nil && err != nil {
+				t.Errorf("Unexpected error: want=%s got =%s", tt.wantErr, err)
+			}
+		})
+	}
 }
 
 func TestBuildListener(t *testing.T) {
@@ -2552,5 +2582,64 @@ func TestAzToRegion(t *testing.T) {
 		result, err := azToRegion(testCase.az)
 		assert.NoError(t, err)
 		assert.Equal(t, testCase.region, result)
+	}
+}
+
+func TestCloud_sortELBSecurityGroupList(t *testing.T) {
+	type args struct {
+		securityGroupIDs []string
+		annotations      map[string]string
+	}
+	tests := []struct {
+		name                 string
+		args                 args
+		wantSecurityGroupIDs []string
+	}{
+		{
+			name: "with no annotation",
+			args: args{
+				securityGroupIDs: []string{"sg-1"},
+				annotations:      map[string]string{},
+			},
+			wantSecurityGroupIDs: []string{"sg-1"},
+		},
+		{
+			name: "with service.beta.kubernetes.io/aws-load-balancer-security-groups",
+			args: args{
+				securityGroupIDs: []string{"sg-2", "sg-1", "sg-3"},
+				annotations: map[string]string{
+					"service.beta.kubernetes.io/aws-load-balancer-security-groups": "sg-3,sg-2,sg-1",
+				},
+			},
+			wantSecurityGroupIDs: []string{"sg-3", "sg-2", "sg-1"},
+		},
+		{
+			name: "with service.beta.kubernetes.io/aws-load-balancer-extra-security-groups",
+			args: args{
+				securityGroupIDs: []string{"sg-2", "sg-1", "sg-3", "sg-4"},
+				annotations: map[string]string{
+					"service.beta.kubernetes.io/aws-load-balancer-extra-security-groups": "sg-3,sg-2,sg-1",
+				},
+			},
+			wantSecurityGroupIDs: []string{"sg-4", "sg-3", "sg-2", "sg-1"},
+		},
+		{
+			name: "with both annotation",
+			args: args{
+				securityGroupIDs: []string{"sg-2", "sg-1", "sg-3", "sg-4", "sg-5", "sg-6"},
+				annotations: map[string]string{
+					"service.beta.kubernetes.io/aws-load-balancer-security-groups":       "sg-3,sg-2,sg-1",
+					"service.beta.kubernetes.io/aws-load-balancer-extra-security-groups": "sg-6,sg-5",
+				},
+			},
+			wantSecurityGroupIDs: []string{"sg-3", "sg-2", "sg-1", "sg-4", "sg-6", "sg-5"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Cloud{}
+			c.sortELBSecurityGroupList(tt.args.securityGroupIDs, tt.args.annotations)
+			assert.Equal(t, tt.wantSecurityGroupIDs, tt.args.securityGroupIDs)
+		})
 	}
 }

@@ -289,7 +289,7 @@ var _ = SIGDescribe("StatefulSet", func() {
 		})
 
 		/*
-		   Release : v1.9
+		   Release: v1.9
 		   Testname: StatefulSet, Rolling Update
 		   Description: StatefulSet MUST support the RollingUpdate strategy to automatically replace Pods one at a time when the Pod template changes. The StatefulSet's status MUST indicate the CurrentRevision and UpdateRevision. If the template is changed to match a prior revision, StatefulSet MUST detect this as a rollback instead of creating a new revision. This test does not depend on a preexisting default StorageClass or a dynamic provisioner.
 		*/
@@ -300,7 +300,7 @@ var _ = SIGDescribe("StatefulSet", func() {
 		})
 
 		/*
-		   Release : v1.9
+		   Release: v1.9
 		   Testname: StatefulSet, Rolling Update with Partition
 		   Description: StatefulSet's RollingUpdate strategy MUST support the Partition parameter for canaries and phased rollouts. If a Pod is deleted while a rolling update is in progress, StatefulSet MUST restore the Pod without violating the Partition. This test does not depend on a preexisting default StorageClass or a dynamic provisioner.
 		*/
@@ -570,7 +570,7 @@ var _ = SIGDescribe("StatefulSet", func() {
 		})
 
 		/*
-		   Release : v1.9
+		   Release: v1.9
 		   Testname: StatefulSet, Scaling
 		   Description: StatefulSet MUST create Pods in ascending order by ordinal index when scaling up, and delete Pods in descending order when scaling down. Scaling up or down MUST pause if any Pods belonging to the StatefulSet are unhealthy. This test does not depend on a preexisting default StorageClass or a dynamic provisioner.
 		*/
@@ -680,7 +680,7 @@ var _ = SIGDescribe("StatefulSet", func() {
 		})
 
 		/*
-		   Release : v1.9
+		   Release: v1.9
 		   Testname: StatefulSet, Burst Scaling
 		   Description: StatefulSet MUST support the Parallel PodManagementPolicy for burst scaling. This test does not depend on a preexisting default StorageClass or a dynamic provisioner.
 		*/
@@ -722,7 +722,7 @@ var _ = SIGDescribe("StatefulSet", func() {
 		})
 
 		/*
-		   Release : v1.9
+		   Release: v1.9
 		   Testname: StatefulSet, Recreate Failed Pod
 		   Description: StatefulSet MUST delete and recreate Pods it owns that go into a Failed state, such as when they are rejected or evicted by a Node. This test does not depend on a preexisting default StorageClass or a dynamic provisioner.
 		*/
@@ -830,7 +830,7 @@ var _ = SIGDescribe("StatefulSet", func() {
 		})
 
 		/*
-			Release : v1.16
+			Release: v1.16
 			Testname: StatefulSet resource Replica scaling
 			Description: Create a StatefulSet resource.
 			Newly created StatefulSet resource MUST have a scale of one.
@@ -843,7 +843,7 @@ var _ = SIGDescribe("StatefulSet", func() {
 			ss, err := c.AppsV1().StatefulSets(ns).Create(context.TODO(), ss, metav1.CreateOptions{})
 			framework.ExpectNoError(err)
 			e2estatefulset.WaitForRunningAndReady(c, *ss.Spec.Replicas, ss)
-			ss = waitForStatus(c, ss)
+			waitForStatus(c, ss)
 
 			ginkgo.By("getting scale subresource")
 			scale, err := c.AppsV1().StatefulSets(ns).GetScale(context.TODO(), ssName, metav1.GetOptions{})
@@ -1151,7 +1151,7 @@ func rollbackTest(c clientset.Interface, ns string, ss *appsv1.StatefulSet) {
 	e2estatefulset.SortStatefulPods(pods)
 	err = breakPodHTTPProbe(ss, &pods.Items[1])
 	framework.ExpectNoError(err)
-	ss, pods = waitForPodNotReady(c, ss, pods.Items[1].Name)
+	ss, _ = waitForPodNotReady(c, ss, pods.Items[1].Name)
 	newImage := NewWebserverImage
 	oldImage := ss.Spec.Template.Spec.Containers[0].Image
 
@@ -1172,7 +1172,7 @@ func rollbackTest(c clientset.Interface, ns string, ss *appsv1.StatefulSet) {
 	e2estatefulset.SortStatefulPods(pods)
 	err = restorePodHTTPProbe(ss, &pods.Items[1])
 	framework.ExpectNoError(err)
-	ss, pods = e2estatefulset.WaitForPodReady(c, ss, pods.Items[1].Name)
+	ss, _ = e2estatefulset.WaitForPodReady(c, ss, pods.Items[1].Name)
 	ss, pods = waitForRollingUpdate(c, ss)
 	framework.ExpectEqual(ss.Status.CurrentRevision, updateRevision, fmt.Sprintf("StatefulSet %s/%s current revision %s does not equal update revision %s on update completion",
 		ss.Namespace,
@@ -1195,9 +1195,8 @@ func rollbackTest(c clientset.Interface, ns string, ss *appsv1.StatefulSet) {
 	ginkgo.By("Rolling back to a previous revision")
 	err = breakPodHTTPProbe(ss, &pods.Items[1])
 	framework.ExpectNoError(err)
-	ss, pods = waitForPodNotReady(c, ss, pods.Items[1].Name)
+	ss, _ = waitForPodNotReady(c, ss, pods.Items[1].Name)
 	priorRevision := currentRevision
-	currentRevision, updateRevision = ss.Status.CurrentRevision, ss.Status.UpdateRevision
 	ss, err = updateStatefulSetWithRetries(c, ns, ss.Name, func(update *appsv1.StatefulSet) {
 		update.Spec.Template.Spec.Containers[0].Image = oldImage
 	})
@@ -1211,7 +1210,7 @@ func rollbackTest(c clientset.Interface, ns string, ss *appsv1.StatefulSet) {
 	pods = e2estatefulset.GetPodList(c, ss)
 	e2estatefulset.SortStatefulPods(pods)
 	restorePodHTTPProbe(ss, &pods.Items[1])
-	ss, pods = e2estatefulset.WaitForPodReady(c, ss, pods.Items[1].Name)
+	ss, _ = e2estatefulset.WaitForPodReady(c, ss, pods.Items[1].Name)
 	ss, pods = waitForRollingUpdate(c, ss)
 	framework.ExpectEqual(ss.Status.CurrentRevision, priorRevision, fmt.Sprintf("StatefulSet %s/%s current revision %s does not equal prior revision %s on rollback completion",
 		ss.Namespace,

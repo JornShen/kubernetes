@@ -257,6 +257,10 @@ func (config *NetworkingTestConfig) DialFromContainer(protocol, dialCommand, con
 	for i := 0; i < maxTries; i++ {
 		resp, err := config.GetResponseFromContainer(protocol, dialCommand, containerIP, targetIP, containerHTTPPort, targetPort)
 		if err != nil {
+			// A failure to kubectl exec counts as a try, not a hard fail.
+			// Also note that we will keep failing for maxTries in tests where
+			// we confirm unreachability.
+			framework.Logf("GetResponseFromContainer: %s", err)
 			continue
 		}
 		for _, response := range resp.Responses {
@@ -293,14 +297,7 @@ func (config *NetworkingTestConfig) GetEndpointsFromTestContainer(protocol, targ
 //   we don't see any endpoints, the test fails.
 func (config *NetworkingTestConfig) GetEndpointsFromContainer(protocol, containerIP, targetIP string, containerHTTPPort, targetPort, tries int) (sets.String, error) {
 	ipPort := net.JoinHostPort(containerIP, strconv.Itoa(containerHTTPPort))
-	// The current versions of curl included in CentOS and RHEL distros
-	// misinterpret square brackets around IPv6 as globbing, so use the -g
-	// argument to disable globbing to handle the IPv6 case.
-	cmd := fmt.Sprintf("curl -g -q -s 'http://%s/dial?request=hostName&protocol=%s&host=%s&port=%d&tries=1'",
-		ipPort,
-		protocol,
-		targetIP,
-		targetPort)
+	cmd := makeCURLDialCommand(ipPort, "hostName", protocol, targetIP, targetPort)
 
 	eps := sets.NewString()
 
@@ -312,11 +309,11 @@ func (config *NetworkingTestConfig) GetEndpointsFromContainer(protocol, containe
 			// we confirm unreachability.
 			framework.Logf("Failed to execute %q: %v, stdout: %q, stderr: %q", cmd, err, stdout, stderr)
 		} else {
-			framework.Logf("Tries: %d, in try: %d, stdout: %v, stderr: %v, command run in: %#v", tries, i, stdout, stderr, config.HostTestContainerPod)
+			framework.Logf("Tries: %d, in try: %d, stdout: %v, stderr: %v, command run in: %#v", tries, i, stdout, stderr, config.TestContainerPod)
 			var output NetexecDialResponse
 			if err := json.Unmarshal([]byte(stdout), &output); err != nil {
 				framework.Logf("WARNING: Failed to unmarshal curl response. Cmd %v run in %v, output: %s, err: %v",
-					cmd, config.HostTestContainerPod.Name, stdout, err)
+					cmd, config.TestContainerPod.Name, stdout, err)
 				continue
 			}
 
@@ -340,18 +337,13 @@ func (config *NetworkingTestConfig) GetResponseFromContainer(protocol, dialComma
 
 	stdout, stderr, err := config.f.ExecShellInPodWithFullOutput(config.TestContainerPod.Name, cmd)
 	if err != nil {
-		// A failure to kubectl exec counts as a try, not a hard fail.
-		// Also note that we will keep failing for maxTries in tests where
-		// we confirm unreachability.
-		framework.Logf("Failed to execute %q: %v, stdout: %q, stderr: %q", cmd, err, stdout, stderr)
-		return NetexecDialResponse{}, err
+		return NetexecDialResponse{}, fmt.Errorf("failed to execute %q: %v, stdout: %q, stderr: %q", cmd, err, stdout, stderr)
 	}
 
 	var output NetexecDialResponse
 	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
-		framework.Logf("WARNING: Failed to unmarshal curl response. Cmd %v run in %v, output: %s, err: %v",
-			cmd, config.HostTestContainerPod.Name, stdout, err)
-		return NetexecDialResponse{}, err
+		return NetexecDialResponse{}, fmt.Errorf("failed to unmarshal curl response. Cmd %v run in %v, output: %s, err: %v",
+			cmd, config.TestContainerPod.Name, stdout, err)
 	}
 	return output, nil
 }
@@ -359,6 +351,27 @@ func (config *NetworkingTestConfig) GetResponseFromContainer(protocol, dialComma
 // GetResponseFromTestContainer executes a curl via kubectl exec in a test container.
 func (config *NetworkingTestConfig) GetResponseFromTestContainer(protocol, dialCommand, targetIP string, targetPort int) (NetexecDialResponse, error) {
 	return config.GetResponseFromContainer(protocol, dialCommand, config.TestContainerPod.Status.PodIP, targetIP, testContainerHTTPPort, targetPort)
+}
+
+// GetHTTPCodeFromTestContainer executes a curl via kubectl exec in a test container and returns the status code.
+func (config *NetworkingTestConfig) GetHTTPCodeFromTestContainer(path, targetIP string, targetPort int) (int, error) {
+	cmd := fmt.Sprintf("curl -g -q -s -o /dev/null -w %%{http_code} http://%s:%d%s",
+		targetIP,
+		targetPort,
+		path)
+	stdout, stderr, err := config.f.ExecShellInPodWithFullOutput(config.TestContainerPod.Name, cmd)
+	// We only care about the status code reported by curl,
+	// and want to return any other errors, such as cannot execute command in the Pod.
+	// If curl failed to connect to host, it would exit with code 7, which makes `ExecShellInPodWithFullOutput`
+	// return a non-nil error and output "000" to stdout.
+	if err != nil && len(stdout) == 0 {
+		return 0, fmt.Errorf("failed to execute %q: %v, stderr: %q", cmd, err, stderr)
+	}
+	code, err := strconv.Atoi(stdout)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse status code returned by healthz endpoint: %w, code: %s", err, stdout)
+	}
+	return code, nil
 }
 
 // DialFromNode executes a tcp or udp request based on protocol via kubectl exec
@@ -700,6 +713,13 @@ func (config *NetworkingTestConfig) setup(selector map[string]string) {
 	} else {
 		config.NodeIP = e2enode.FirstAddress(nodeList, v1.NodeInternalIP)
 	}
+
+	ginkgo.By("Waiting for NodePort service to expose endpoint")
+	err = framework.WaitForServiceEndpointsNum(config.f.ClientSet, config.Namespace, nodePortServiceName, len(config.EndpointPods), time.Second, wait.ForeverTestTimeout)
+	framework.ExpectNoError(err, "failed to validate endpoints for service %s in namespace: %s", nodePortServiceName, config.Namespace)
+	ginkgo.By("Waiting for Session Affinity service to expose endpoint")
+	err = framework.WaitForServiceEndpointsNum(config.f.ClientSet, config.Namespace, sessionAffinityServiceName, len(config.EndpointPods), time.Second, wait.ForeverTestTimeout)
+	framework.ExpectNoError(err, "failed to validate endpoints for service %s in namespace: %s", sessionAffinityServiceName, config.Namespace)
 }
 
 func (config *NetworkingTestConfig) createNetProxyPods(podName string, selector map[string]string) []*v1.Pod {

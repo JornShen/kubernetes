@@ -40,7 +40,7 @@ For example, let's consider the following `pod.yaml` file:
       containers:
       - args:
         - dns-suffix
-        image: us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.14
+        image: k8s.gcr.io/e2e-test-images/agnhost:2.14
         name: agnhost
       dnsConfig:
         nameservers:
@@ -88,7 +88,7 @@ Usage:
 
 ### connect
 
-Tries to open a TCP connection to the given host and port. On error it
+Tries to open a TCP or SCTP connection to the given host and port. On error it
 prints an error message prefixed with a specific fixed string that
 test cases can check for:
 
@@ -105,9 +105,11 @@ output than to check the exit code.)
 Usage:
 
 ```console
-    kubectl exec test-agnost -- /agnost connect [--timeout=<duration>] <host>:<port>
+    kubectl exec test-agnhost -- /agnhost connect [--timeout=<duration>] [--protocol=<protocol>] <host>:<port>
 ```
 
+The optional `--protocol` parameter can be set to `sctp` to test SCTP
+connections. The default value is `tcp`.
 
 ### crd-conversion-webhook
 
@@ -194,30 +196,30 @@ Usage:
 Starts a HTTP server on the given `--http-port` (default: 80), serving various endpoints representing a
 guestbook app. The endpoints and their purpose are:
 
-- `/register`: A guestbook replica will subscribe to a master, to its given `--replicaof` endpoint. The master
+- `/register`: A guestbook replica will subscribe to a primary, to its given `--replicaof` endpoint. The primary
   will then push any updates it receives to its registered replicas through the `--backend-port` (default: 6379).
 - `/get`: Returns `{"data": value}`, where the `value` is the stored value for the given `key` if non-empty,
   or the entire store.
 - `/set`: Will set the given key-value pair in its own store and propagate it to its replicas, if any.
   Will return `{"data": "Updated"}` to the caller on success.
-- `/guestbook`: Will proxy the request to `agnhost-master` if the given `cmd` is `set`, or `agnhost-replica`
+- `/guestbook`: Will proxy the request to `agnhost-primary` if the given `cmd` is `set`, or `agnhost-replica`
   if the given `cmd` is `get`.
 
 Usage:
 
 ```console
 guestbook="test/e2e/testing-manifests/guestbook"
-sed_expr="s|{{.AgnhostImage}}|us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.14|"
+sed_expr="s|{{.AgnhostImage}}|k8s.gcr.io/e2e-test-images/agnhost:2.14|"
 
 # create the services.
 kubectl create -f ${guestbook}/frontend-service.yaml
-kubectl create -f ${guestbook}/agnhost-master-service.yaml
-kubectl create -f ${guestbook}/agnhost-slave-service.yaml
+kubectl create -f ${guestbook}/agnhost-primary-service.yaml
+kubectl create -f ${guestbook}/agnhost-replica-service.yaml
 
 # create the deployments.
 cat ${guestbook}/frontend-deployment.yaml.in | sed ${sed_expr} | kubectl create -f -
-cat ${guestbook}/agnhost-master-deployment.yaml.in | sed ${sed_expr} | kubectl create -f -
-cat ${guestbook}/agnhost-slave-deployment.yaml.in | sed ${sed_expr} | kubectl create -f -
+cat ${guestbook}/agnhost-primary-deployment.yaml.in | sed ${sed_expr} | kubectl create -f -
+cat ${guestbook}/agnhost-replica-deployment.yaml.in | sed ${sed_expr} | kubectl create -f -
 ```
 
 
@@ -290,14 +292,14 @@ Examples:
 
 ```console
 docker run -i \
-  us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.14 \
+  k8s.gcr.io/e2e-test-images/agnhost:2.14 \
   logs-generator --log-lines-total 10 --run-duration 1s
 ```
 
 ```console
 kubectl run logs-generator \
   --generator=run-pod/v1 \
-  --image=us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.14 \
+  --image=k8s.gcr.io/e2e-test-images/agnhost:2.14 \
   --restart=Never \
   -- logs-generator -t 10 -d 1s
 ```
@@ -474,7 +476,7 @@ Usage:
 ```console
     kubectl run test-agnhost \
       --generator=run-pod/v1 \
-      --image=us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.14 \
+      --image=k8s.gcr.io/e2e-test-images/agnhost:2.14 \
       --restart=Never \
       --env "POD_IP=<POD_IP>" \
       --env "NODE_IP=<NODE_IP>" \
@@ -529,7 +531,7 @@ Usage:
 ```console
     kubectl run test-agnhost \
       --generator=run-pod/v1 \
-      --image=us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.14 \
+      --image=k8s.gcr.io/e2e-test-images/agnhost:2.14 \
       --restart=Never \
       --env "BIND_ADDRESS=localhost" \
       --env "BIND_PORT=8080" \
@@ -543,10 +545,10 @@ Usage:
 
 ### porter
 
-Serves requested data on ports specified in ENV variables. For example, if the environment
-variable `SERVE_PORT_9001` is set, then the subcommand will start serving on the port 9001.
-Additionally, if the environment variable `SERVE_TLS_PORT_9002` is set, then the subcommand
-will start a TLS server on that port.
+Serves requested data on ports specified in environment variables of the form `SERVE_{PORT,TLS_PORT,SCTP_PORT}_[NNNN]`. eg:
+    - `SERVE_PORT_9001` - serve TCP connections on port 9001
+    - `SERVE_TLS_PORT_9002` - serve TLS-encrypted TCP connections on port 9002
+    - `SERVE_SCTP_PORT_9003` - serve SCTP connections on port 9003
 
 The included `localhost.crt` is a PEM-encoded TLS cert with SAN IPs `127.0.0.1` and `[::1]`,
 expiring in January 2084, generated from `src/crypto/tls`:
@@ -657,6 +659,6 @@ The Windows `agnhost` image includes a `nc` binary that is 100% compliant with i
 
 ## Image
 
-The image can be found at `us.gcr.io/k8s-artifacts-prod/e2e-test-images/agnhost:2.14` for both Linux and
+The image can be found at `k8s.gcr.io/e2e-test-images/agnhost:2.14` for both Linux and
 Windows containers (based on `mcr.microsoft.com/windows/servercore:ltsc2019`,
 `mcr.microsoft.com/windows/servercore:1903`, and `mcr.microsoft.com/windows/servercore:1909`).

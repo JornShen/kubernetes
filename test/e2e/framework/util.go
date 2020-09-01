@@ -51,6 +51,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/client-go/dynamic"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	restclient "k8s.io/client-go/rest"
@@ -133,6 +134,9 @@ const (
 	// SnapshotCreateTimeout is how long for snapshot to create snapshotContent.
 	SnapshotCreateTimeout = 5 * time.Minute
 
+	// SnapshotDeleteTimeout is how long for snapshot to delete snapshotContent.
+	SnapshotDeleteTimeout = 5 * time.Minute
+
 	// Minimal number of nodes for the cluster to be considered large.
 	largeClusterThreshold = 100
 
@@ -199,6 +203,16 @@ func NodeOSDistroIs(supportedNodeOsDistros ...string) bool {
 	return false
 }
 
+// NodeOSArchIs returns true if the node OS arch is included in the supportedNodeOsArchs. Otherwise false.
+func NodeOSArchIs(supportedNodeOsArchs ...string) bool {
+	for _, arch := range supportedNodeOsArchs {
+		if strings.EqualFold(arch, TestContext.NodeOSArch) {
+			return true
+		}
+	}
+	return false
+}
+
 // DeleteNamespaces deletes all namespaces that match the given delete and skip filters.
 // Filter is by simple strings.Contains; first skip filter, then delete filter.
 // Returns the list of deleted namespaces or an error.
@@ -210,11 +224,9 @@ func DeleteNamespaces(c clientset.Interface, deleteFilter, skipFilter []string) 
 	var wg sync.WaitGroup
 OUTER:
 	for _, item := range nsList.Items {
-		if skipFilter != nil {
-			for _, pattern := range skipFilter {
-				if strings.Contains(item.Name, pattern) {
-					continue OUTER
-				}
+		for _, pattern := range skipFilter {
+			if strings.Contains(item.Name, pattern) {
+				continue OUTER
 			}
 		}
 		if deleteFilter != nil {
@@ -1301,4 +1313,73 @@ func taintExists(taints []v1.Taint, taintToFind *v1.Taint) bool {
 		}
 	}
 	return false
+}
+
+// WatchEventSequenceVerifier ...
+// manages a watch for a given resource, ensures that events take place in a given order, retries the test on failure
+//   testContext         cancelation signal across API boundries, e.g: context.TODO()
+//   dc                  sets up a client to the API
+//   resourceType        specify the type of resource
+//   namespace           select a namespace
+//   resourceName        the name of the given resource
+//   listOptions         options used to find the resource, recommended to use listOptions.labelSelector
+//   expectedWatchEvents array of events which are expected to occur
+//   scenario            the test itself
+//   retryCleanup        a function to run which ensures that there are no dangling resources upon test failure
+// this tooling relies on the test to return the events as they occur
+// the entire scenario must be run to ensure that the desired watch events arrive in order (allowing for interweaving of watch events)
+//   if an expected watch event is missing we elect to clean up and run the entire scenario again
+// we try the scenario three times to allow the sequencing to fail a couple of times
+func WatchEventSequenceVerifier(ctx context.Context, dc dynamic.Interface, resourceType schema.GroupVersionResource, namespace string, resourceName string, listOptions metav1.ListOptions, expectedWatchEvents []watch.Event, scenario func(*watchtools.RetryWatcher) []watch.Event, retryCleanup func() error) {
+	listWatcher := &cache.ListWatch{
+		WatchFunc: func(listOptions metav1.ListOptions) (watch.Interface, error) {
+			return dc.Resource(resourceType).Namespace(namespace).Watch(ctx, listOptions)
+		},
+	}
+
+	retries := 3
+retriesLoop:
+	for try := 1; try <= retries; try++ {
+		initResource, err := dc.Resource(resourceType).Namespace(namespace).List(ctx, listOptions)
+		ExpectNoError(err, "Failed to fetch initial resource")
+
+		resourceWatch, err := watchtools.NewRetryWatcher(initResource.GetResourceVersion(), listWatcher)
+		ExpectNoError(err, "Failed to create a resource watch of %v in namespace %v", resourceType.Resource, namespace)
+
+		// NOTE the test may need access to the events to see what's going on, such as a change in status
+		actualWatchEvents := scenario(resourceWatch)
+		errs := sets.NewString()
+		ExpectEqual(len(expectedWatchEvents) <= len(actualWatchEvents), true, "Error: actual watch events amount (%d) must be greater than or equal to expected watch events amount (%d)", len(actualWatchEvents), len(expectedWatchEvents))
+
+		totalValidWatchEvents := 0
+		foundEventIndexes := map[int]*int{}
+
+		for watchEventIndex, expectedWatchEvent := range expectedWatchEvents {
+			foundExpectedWatchEvent := false
+		actualWatchEventsLoop:
+			for actualWatchEventIndex, actualWatchEvent := range actualWatchEvents {
+				if foundEventIndexes[actualWatchEventIndex] != nil {
+					continue actualWatchEventsLoop
+				}
+				if actualWatchEvent.Type == expectedWatchEvent.Type {
+					foundExpectedWatchEvent = true
+					foundEventIndexes[actualWatchEventIndex] = &watchEventIndex
+					break actualWatchEventsLoop
+				}
+			}
+			if foundExpectedWatchEvent == false {
+				errs.Insert(fmt.Sprintf("Watch event %v not found", expectedWatchEvent.Type))
+			}
+			totalValidWatchEvents++
+		}
+		err = retryCleanup()
+		ExpectNoError(err, "Error occurred when cleaning up resources")
+		if errs.Len() > 0 && try < retries {
+			fmt.Println("invariants violated:\n", strings.Join(errs.List(), "\n - "))
+			continue retriesLoop
+		}
+		ExpectEqual(errs.Len() > 0, false, strings.Join(errs.List(), "\n - "))
+		ExpectEqual(totalValidWatchEvents, len(expectedWatchEvents), "Error: there must be an equal amount of total valid watch events (%d) and expected watch events (%d)", totalValidWatchEvents, len(expectedWatchEvents))
+		break retriesLoop
+	}
 }

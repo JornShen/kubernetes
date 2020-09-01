@@ -77,7 +77,7 @@ func NewController(p ControllerParameters) (*PersistentVolumeController, error) 
 	eventRecorder := p.EventRecorder
 	if eventRecorder == nil {
 		broadcaster := record.NewBroadcaster()
-		broadcaster.StartLogging(klog.Infof)
+		broadcaster.StartStructuredLogging(0)
 		broadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: p.KubeClient.CoreV1().Events("")})
 		eventRecorder = broadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "persistentvolume-controller"})
 	}
@@ -134,7 +134,7 @@ func NewController(p ControllerParameters) (*PersistentVolumeController, error) 
 
 	// This custom indexer will index pods by its PVC keys. Then we don't need
 	// to iterate all pods every time to find pods which reference given PVC.
-	if err := common.AddIndexerIfNotPresent(controller.podIndexer, common.PodPVCIndex, common.PodPVCIndexFunc); err != nil {
+	if err := common.AddPodPVCIndexerIfNotPresent(controller.podIndexer); err != nil {
 		return nil, fmt.Errorf("Could not initialize attach detach controller: %v", err)
 	}
 

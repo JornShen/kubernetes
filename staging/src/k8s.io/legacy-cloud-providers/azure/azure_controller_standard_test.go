@@ -79,7 +79,7 @@ func TestStandardAttachDisk(t *testing.T) {
 
 	for i, test := range testCases {
 		testCloud := GetTestCloud(ctrl)
-		vmSet := testCloud.vmSet
+		vmSet := testCloud.VMSet
 		expectedVMs := setTestVirtualMachines(testCloud, map[string]string{"vm1": "PowerState/Running"}, false)
 		mockVMsClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
 		for _, vm := range expectedVMs {
@@ -148,7 +148,7 @@ func TestStandardDetachDisk(t *testing.T) {
 
 	for i, test := range testCases {
 		testCloud := GetTestCloud(ctrl)
-		vmSet := testCloud.vmSet
+		vmSet := testCloud.VMSet
 		expectedVMs := setTestVirtualMachines(testCloud, map[string]string{"vm1": "PowerState/Running"}, false)
 		mockVMsClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
 		for _, vm := range expectedVMs {
@@ -163,6 +163,10 @@ func TestStandardDetachDisk(t *testing.T) {
 
 		err := vmSet.DetachDisk(test.diskName, "", test.nodeName)
 		assert.Equal(t, test.expectedError, err != nil, "TestCase[%d]: %s", i, test.desc)
+		if !test.expectedError && test.diskName != "" {
+			dataDisks, err := vmSet.GetDataDisks(test.nodeName, azcache.CacheReadTypeDefault)
+			assert.Equal(t, true, len(dataDisks) == 1, "TestCase[%d]: %s, err: %v", i, test.desc, err)
+		}
 	}
 }
 
@@ -220,7 +224,7 @@ func TestGetDataDisks(t *testing.T) {
 	}
 	for i, test := range testCases {
 		testCloud := GetTestCloud(ctrl)
-		vmSet := testCloud.vmSet
+		vmSet := testCloud.VMSet
 		expectedVMs := setTestVirtualMachines(testCloud, map[string]string{"vm1": "PowerState/Running"}, false)
 		mockVMsClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
 		for _, vm := range expectedVMs {

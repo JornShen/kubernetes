@@ -57,8 +57,8 @@ $GCE_METADATA_SERVER = "169.254.169.254"
 # exist until an initial HNS network has been created on the Windows node - see
 # Add_InitialHnsNetwork().
 $MGMT_ADAPTER_NAME = "vEthernet (Ethernet*"
-$CRICTL_VERSION = 'v1.18.0'
-$CRICTL_SHA256 = '5045bcc6d8b0e6004be123ab99ea06e5b1b2ae1e586c968fcdf85fccd4d67ae1'
+$CRICTL_VERSION = 'v1.19.0'
+$CRICTL_SHA256 = 'df60ff65ab71c5cf1d8c38f51db6f05e3d60a45d3a3293c3248c925c25375921'
 
 Import-Module -Force C:\common.psm1
 
@@ -261,6 +261,8 @@ function Set-EnvironmentVars {
     "CNI_CONFIG_DIR" = ${kube_env}['CNI_CONFIG_DIR']
     "WINDOWS_CNI_STORAGE_PATH" = ${kube_env}['WINDOWS_CNI_STORAGE_PATH']
     "WINDOWS_CNI_VERSION" = ${kube_env}['WINDOWS_CNI_VERSION']
+    "CSI_PROXY_STORAGE_PATH" = ${kube_env}['CSI_PROXY_STORAGE_PATH']
+    "CSI_PROXY_VERSION" = ${kube_env}['CSI_PROXY_VERSION']
     "PKI_DIR" = ${kube_env}['PKI_DIR']
     "CA_FILE_PATH" = ${kube_env}['CA_FILE_PATH']
     "KUBELET_CONFIG" = ${kube_env}['KUBELET_CONFIG_FILE']
@@ -392,6 +394,35 @@ function DownloadAndInstall-KubernetesBinaries {
 
   # Clean up the temporary directory
   Remove-Item -Force -Recurse $tmp_dir
+}
+
+# Downloads the csi-proxy binaries from kube-env's CSI_PROXY_STORAGE_PATH and
+# CSI_PROXY_VERSION, and then puts them in a subdirectory of $env:NODE_DIR. 
+# Note: for now the installation is skipped for non-test clusters. Will be
+# installed for all cluster after tests pass.
+# Required ${kube_env} keys:
+#   CSI_PROXY_STORAGE_PATH and CSI_PROXY_VERSION
+function DownloadAndInstall-CSIProxyBinaries {
+  if (Test-IsTestCluster $kube_env) {
+    if (ShouldWrite-File ${env:NODE_DIR}\csi-proxy.exe) {
+      $tmp_dir = 'C:\k8s_tmp'
+      New-Item -Force -ItemType 'directory' $tmp_dir | Out-Null
+      $filename = 'csi-proxy.exe'
+      $urls = "${env:CSI_PROXY_STORAGE_PATH}/${env:CSI_PROXY_VERSION}/$filename"
+      MustDownload-File -OutFile $tmp_dir\$filename -URLs $urls
+      Move-Item -Force $tmp_dir\$filename ${env:NODE_DIR}\$filename
+      # Clean up the temporary directory
+      Remove-Item -Force -Recurse $tmp_dir
+    }
+  }
+}
+
+# TODO(jingxu97): Make csi-proxy.exe as a service similar to kubelet.exe
+function Start-CSIProxy {
+  if (Test-IsTestCluster $kube_env) {
+    Log-Output 'Starting CSI Proxy'
+    Start-Process "${env:NODE_DIR}\csi-proxy.exe"
+  }
 }
 
 # TODO(pjh): this is copied from
@@ -900,7 +931,6 @@ function Configure-GcePdTools {
 '$modulePath = "K8S_DIR\GetGcePdName.dll"
 Unblock-File $modulePath
 Import-Module -Name $modulePath'.replace('K8S_DIR', ${env:K8S_DIR})
-
   if (Test-IsTestCluster $kube_env) {
     if (ShouldWrite-File ${env:K8S_DIR}\diskutil.exe) {
       # The source code of this executable file is https://github.com/kubernetes-sigs/sig-windows-tools/blob/master/cmd/diskutil/diskutil.c
@@ -909,7 +939,6 @@ Import-Module -Name $modulePath'.replace('K8S_DIR', ${env:K8S_DIR})
     }
     Copy-Item ${env:K8S_DIR}\diskutil.exe -Destination "C:\Windows\system32"
   }
-
 }
 
 # Setup cni network. This function supports both Docker and containerd.
@@ -1540,6 +1569,38 @@ function Restart-LoggingAgent {
   Start-Service StackdriverLogging
 }
 
+# Check whether the logging agent is installed by whether it's registered as service
+function IsLoggingAgentInstalled {
+  $stackdriver_status = (Get-Service StackdriverLogging -ErrorAction Ignore).Status
+  return -not [string]::IsNullOrEmpty($stackdriver_status)
+}
+
+# Clean up the logging agent's registry key and root folder if they exist from a prior installation.
+# Try to uninstall it first, if it failed, remove the registry key at least, 
+# as the registry key will block the silent installation later on.
+function Cleanup-LoggingAgent {
+  # For 64 bits app, the registry path is 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+  # for 32 bits app, it's 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  # StackdriverLogging is installed as 32 bits app
+  $x32_app_reg = 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  $uninstall_string = (Get-ChildItem $x32_app_reg | Get-ItemProperty | Where-Object {$_.DisplayName -match "Stackdriver"}).UninstallString
+  if (-not [string]::IsNullOrEmpty($uninstall_string)) {
+    try {
+      Start-Process -FilePath "$uninstall_string" -ArgumentList "/S" -Wait
+    } catch {
+      Log-Output "Exception happens during uninstall logging agent, so remove the registry key at least"
+      Remove-Item -Path "$x32_app_reg\GoogleStackdriverLoggingAgent\"
+    }
+  }
+
+  #  If we chose reboot after uninstallation, the root folder would be clean.
+  #  But since we couldn't reboot, so some files & folders would be left there, 
+  #  which could block the re-installation later on, so clean it up
+  if(Test-Path $STACKDRIVER_ROOT){
+    Remove-Item -Force -Recurse $STACKDRIVER_ROOT
+  }
+}
+
 # Installs the Stackdriver logging agent according to
 # https://cloud.google.com/logging/docs/agent/installation.
 # TODO(yujuhong): Update to a newer Stackdriver agent once it is released to
@@ -1556,17 +1617,18 @@ function Install-LoggingAgent {
       ("$STACKDRIVER_ROOT\LoggingAgent\Main\pos\winevtlog.pos\worker0\" +
        "storage.json")
 
-  if (Test-Path $STACKDRIVER_ROOT) {
+  if (IsLoggingAgentInstalled) {
     # Note: we should reinstall the Stackdriver agent if $REDO_STEPS is true
     # here, but we don't know how to run the installer without it prompting
     # when Stackdriver is already installed. We dumped the strings in the
     # installer binary and searched for flags to do this but found nothing. Oh
     # well.
-    Log-Output ("Skip: $STACKDRIVER_ROOT is already present, assuming that " +
-                "Stackdriver logging agent is already installed")
-    Restart-LoggingAgent
+    Log-Output ("Skip: Stackdriver logging agent is already installed")
     return
   }
+  
+  # After a crash, the StackdriverLogging service could be missing, but its files will still be present
+  Cleanup-LoggingAgent
 
   $url = ("https://storage.googleapis.com/gke-release/winnode/stackdriver/" +
           "StackdriverLogging-${STACKDRIVER_VERSION}.exe")

@@ -259,10 +259,9 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
-func newTestCacher(s storage.Interface, cap int) (*Cacher, storage.Versioner, error) {
+func newTestCacher(s storage.Interface) (*Cacher, storage.Versioner, error) {
 	prefix := "pods"
 	config := Config{
-		CacheCapacity:  cap,
 		Storage:        s,
 		Versioner:      testVersioner{},
 		ResourcePrefix: prefix,
@@ -271,6 +270,7 @@ func newTestCacher(s storage.Interface, cap int) (*Cacher, storage.Versioner, er
 		NewFunc:        func() runtime.Object { return &example.Pod{} },
 		NewListFunc:    func() runtime.Object { return &example.PodList{} },
 		Codec:          codecs.LegacyCodec(examplev1.SchemeGroupVersion),
+		Clock:          clock.RealClock{},
 	}
 	cacher, err := NewCacherFromConfig(config)
 	return cacher, testVersioner{}, err
@@ -331,7 +331,7 @@ func (d *dummyStorage) Count(_ string) (int64, error) {
 
 func TestListCacheBypass(t *testing.T) {
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 0)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestListCacheBypass(t *testing.T) {
 
 func TestGetToListCacheBypass(t *testing.T) {
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 0)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}
@@ -401,7 +401,7 @@ func TestGetToListCacheBypass(t *testing.T) {
 
 func TestGetCacheBypass(t *testing.T) {
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 1)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestGetCacheBypass(t *testing.T) {
 
 func TestWatcherNotGoingBackInTime(t *testing.T) {
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 1000)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}
@@ -557,7 +557,7 @@ func TestCacheWatcherStoppedInAnotherGoroutine(t *testing.T) {
 
 func TestCacheWatcherStoppedOnDestroy(t *testing.T) {
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 1000)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}
@@ -639,7 +639,7 @@ func TestTimeBucketWatchersBasic(t *testing.T) {
 func TestCacherNoLeakWithMultipleWatchers(t *testing.T) {
 	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.WatchBookmark, true)()
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 1000)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}
@@ -707,7 +707,7 @@ func TestCacherNoLeakWithMultipleWatchers(t *testing.T) {
 
 func testCacherSendBookmarkEvents(t *testing.T, allowWatchBookmarks, expectedBookmarks bool) {
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 1000)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}
@@ -795,7 +795,7 @@ func TestCacherSendBookmarkEvents(t *testing.T) {
 
 func TestCacherSendsMultipleWatchBookmarks(t *testing.T) {
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 1000)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}
@@ -867,7 +867,7 @@ func TestCacherSendsMultipleWatchBookmarks(t *testing.T) {
 func TestDispatchingBookmarkEventsWithConcurrentStop(t *testing.T) {
 	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.WatchBookmark, true)()
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 1000)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}
@@ -940,7 +940,7 @@ func TestDispatchingBookmarkEventsWithConcurrentStop(t *testing.T) {
 
 func TestDispatchEventWillNotBeBlockedByTimedOutWatcher(t *testing.T) {
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 1000)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}
@@ -1039,7 +1039,7 @@ func verifyEvents(t *testing.T, w watch.Interface, events []watch.Event) {
 
 func TestCachingDeleteEvents(t *testing.T) {
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 1000)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}
@@ -1119,7 +1119,7 @@ func TestCachingDeleteEvents(t *testing.T) {
 
 func testCachingObjects(t *testing.T, watchersCount int) {
 	backingStorage := &dummyStorage{}
-	cacher, _, err := newTestCacher(backingStorage, 10)
+	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
 		t.Fatalf("Couldn't create cacher: %v", err)
 	}

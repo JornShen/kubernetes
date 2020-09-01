@@ -20,7 +20,7 @@ import (
 	"net"
 	"strconv"
 
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/util/feature"
 	componentbaseconfigv1alpha1 "k8s.io/component-base/config/v1alpha1"
@@ -34,8 +34,8 @@ import (
 )
 
 var defaultResourceSpec = []v1beta1.ResourceSpec{
-	{Name: string(v1.ResourceCPU), Weight: 1},
-	{Name: string(v1.ResourceMemory), Weight: 1},
+	{Name: string(corev1.ResourceCPU), Weight: 1},
+	{Name: string(corev1.ResourceMemory), Weight: 1},
 }
 
 func addDefaultingFuncs(scheme *runtime.Scheme) error {
@@ -101,11 +101,6 @@ func SetDefaults_KubeSchedulerConfiguration(obj *v1beta1.KubeSchedulerConfigurat
 				obj.MetricsBindAddress = &defaultBindAddress
 			}
 		}
-	}
-
-	if obj.DisablePreemption == nil {
-		disablePreemption := false
-		obj.DisablePreemption = &disablePreemption
 	}
 
 	if obj.PercentageOfNodesToScore == nil {
@@ -199,19 +194,19 @@ func SetDefaults_VolumeBindingArgs(obj *v1beta1.VolumeBindingArgs) {
 func SetDefaults_PodTopologySpreadArgs(obj *v1beta1.PodTopologySpreadArgs) {
 	if !feature.DefaultFeatureGate.Enabled(features.DefaultPodTopologySpread) {
 		// When feature is disabled, the default spreading is done by legacy
-		// DefaultPodTopologySpread plugin.
+		// SelectorSpread plugin.
 		return
 	}
 	if obj.DefaultConstraints == nil {
-		obj.DefaultConstraints = []v1.TopologySpreadConstraint{
+		obj.DefaultConstraints = []corev1.TopologySpreadConstraint{
 			{
-				TopologyKey:       v1.LabelHostname,
-				WhenUnsatisfiable: v1.ScheduleAnyway,
+				TopologyKey:       corev1.LabelHostname,
+				WhenUnsatisfiable: corev1.ScheduleAnyway,
 				MaxSkew:           3,
 			},
 			{
-				TopologyKey:       v1.LabelZoneFailureDomainStable,
-				WhenUnsatisfiable: v1.ScheduleAnyway,
+				TopologyKey:       corev1.LabelZoneFailureDomainStable,
+				WhenUnsatisfiable: corev1.ScheduleAnyway,
 				MaxSkew:           5,
 			},
 		}

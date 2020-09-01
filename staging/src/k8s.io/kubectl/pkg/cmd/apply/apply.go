@@ -250,6 +250,10 @@ func (o *ApplyOptions) Complete(f cmdutil.Factory, cmd *cobra.Command) error {
 		return err
 	}
 
+	if o.ServerSideApply && o.DeleteOptions.ForceDeletion {
+		return fmt.Errorf("--force cannot be used with --server-side")
+	}
+
 	if o.DryRunStrategy == cmdutil.DryRunServer && o.DeleteOptions.ForceDeletion {
 		return fmt.Errorf("--dry-run=server cannot be used with --force")
 	}
@@ -397,6 +401,14 @@ func (o *ApplyOptions) applyOneObject(info *resource.Info) error {
 
 	if err := o.Recorder.Record(info.Object); err != nil {
 		klog.V(4).Infof("error recording current command: %v", err)
+	}
+
+	if len(info.Name) == 0 {
+		metadata, _ := meta.Accessor(info.Object)
+		generatedName := metadata.GetGenerateName()
+		if len(generatedName) > 0 {
+			return fmt.Errorf("from %s: cannot use generate name with apply", generatedName)
+		}
 	}
 
 	helper := resource.NewHelper(info.Client, info.Mapping).

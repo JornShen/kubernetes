@@ -42,7 +42,7 @@ var _ = framework.KubeDescribe("Container Runtime", func() {
 		ginkgo.Context("when starting a container that exits", func() {
 
 			/*
-				Release : v1.13
+				Release: v1.13
 				Testname: Container Runtime, Restart Policy, Pod Phases
 				Description: If the restart policy is set to 'Always', Pod MUST be restarted when terminated, If restart policy is 'OnFailure', Pod MUST be started only if it is terminated with non-zero exit code. If the restart policy is 'Never', Pod MUST never be restarted. All these three test cases MUST verify the restart counts accordingly.
 			*/
@@ -265,9 +265,9 @@ while true; do sleep 1; done
 
 		ginkgo.Context("when running a container with a new image", func() {
 
-			// Images used for ConformanceContainer are not added into NodeImageWhiteList, because this test is
+			// Images used for ConformanceContainer are not added into NodePrePullImageList, because this test is
 			// testing image pulling, these images don't need to be prepulled. The ImagePullPolicy
-			// is v1.PullAlways, so it won't be blocked by framework image white list check.
+			// is v1.PullAlways, so it won't be blocked by framework image pre-pull list check.
 			imagePullTest := func(image string, hasSecret bool, expectedPhase v1.PodPhase, expectedPullStatus bool, windowsImage bool) {
 				command := []string{"/bin/sh", "-c", "while true; do sleep 1; done"}
 				if windowsImage {

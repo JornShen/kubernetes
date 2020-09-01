@@ -2180,7 +2180,7 @@ func TestGetNodeNameByProviderID(t *testing.T) {
 	}
 
 	for _, test := range providers {
-		name, err := az.vmSet.GetNodeNameByProviderID(test.providerID)
+		name, err := az.VMSet.GetNodeNameByProviderID(test.providerID)
 		if (err != nil) != test.fail {
 			t.Errorf("Expected to fail=%t, with pattern %v", test.fail, test)
 		}
@@ -3324,8 +3324,8 @@ func TestInitializeCloudFromConfig(t *testing.T) {
 		AzureAuthConfig: auth.AzureAuthConfig{
 			Cloud: "AZUREPUBLICCLOUD",
 		},
+		CloudConfigType: cloudConfigTypeFile,
 	}
-	az.Config.CloudConfigType = cloudConfigTypeFile
 	err = az.InitializeCloudFromConfig(&config, false)
 	expectedErr = fmt.Errorf("useInstanceMetadata must be enabled without Azure credentials")
 	assert.Equal(t, expectedErr, err)

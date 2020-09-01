@@ -64,7 +64,7 @@ func InitVolumeExpandTestSuite() TestSuite {
 				testpatterns.BlockVolModeDynamicPVAllowExpansion,
 			},
 			SupportedSizeRange: e2evolume.SizeRange{
-				Min: "1Mi",
+				Min: "1Gi",
 			},
 		},
 	}
@@ -86,8 +86,7 @@ func (v *volumeExpandTestSuite) DefineTests(driver TestDriver, pattern testpatte
 		pod      *v1.Pod
 		pod2     *v1.Pod
 
-		intreeOps   opCounts
-		migratedOps opCounts
+		migrationCheck *migrationOpCheck
 	}
 	var l local
 
@@ -112,7 +111,7 @@ func (v *volumeExpandTestSuite) DefineTests(driver TestDriver, pattern testpatte
 
 		// Now do the more expensive test initialization.
 		l.config, l.driverCleanup = driver.PrepareTest(f)
-		l.intreeOps, l.migratedOps = getMigrationVolumeOpCounts(f.ClientSet, driver.GetDriverInfo().InTreePluginName)
+		l.migrationCheck = newMigrationOpCheck(f.ClientSet, driver.GetDriverInfo().InTreePluginName)
 		testVolumeSizeRange := v.GetTestSuiteInfo().SupportedSizeRange
 		l.resource = CreateVolumeResource(driver, l.config, pattern, testVolumeSizeRange)
 	}
@@ -141,7 +140,7 @@ func (v *volumeExpandTestSuite) DefineTests(driver TestDriver, pattern testpatte
 		errs = append(errs, tryFunc(l.driverCleanup))
 		l.driverCleanup = nil
 		framework.ExpectNoError(errors.NewAggregate(errs), "while cleaning up resource")
-		validateMigrationVolumeOpCounts(f.ClientSet, driver.GetDriverInfo().InTreePluginName, l.intreeOps, l.migratedOps)
+		l.migrationCheck.validateMigrationVolumeOpCounts()
 	}
 
 	if !pattern.AllowExpansion {
@@ -249,7 +248,7 @@ func (v *volumeExpandTestSuite) DefineTests(driver TestDriver, pattern testpatte
 			}()
 			framework.ExpectNoError(err, "While creating pods for resizing")
 
-			// We expand the PVC while no pod is using it to ensure offline expansion
+			// We expand the PVC while l.pod is using it for online expansion.
 			ginkgo.By("Expanding current pvc")
 			currentPvcSize := l.resource.Pvc.Spec.Resources.Requests[v1.ResourceStorage]
 			newSize := currentPvcSize.DeepCopy()

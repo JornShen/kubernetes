@@ -100,7 +100,7 @@ func InitNFSDriver() testsuites.TestDriver {
 			InTreePluginName: "kubernetes.io/nfs",
 			MaxFileSize:      testpatterns.FileSizeLarge,
 			SupportedSizeRange: e2evolume.SizeRange{
-				Min: "5Gi",
+				Min: "1Gi",
 			},
 			SupportedFsType: sets.NewString(
 				"", // Default fsType
@@ -242,7 +242,7 @@ func InitGlusterFSDriver() testsuites.TestDriver {
 			InTreePluginName: "kubernetes.io/glusterfs",
 			MaxFileSize:      testpatterns.FileSizeMedium,
 			SupportedSizeRange: e2evolume.SizeRange{
-				Min: "5Gi",
+				Min: "1Gi",
 			},
 			SupportedFsType: sets.NewString(
 				"", // Default fsType
@@ -324,14 +324,26 @@ func (v *glusterVolume) DeleteVolume() {
 
 	name := v.prefix + "-server"
 
-	framework.Logf("Deleting Gluster endpoints %q...", name)
+	nameSpaceName := fmt.Sprintf("%s/%s", ns.Name, name)
+
+	framework.Logf("Deleting Gluster endpoints %s...", nameSpaceName)
 	err := cs.CoreV1().Endpoints(ns.Name).Delete(context.TODO(), name, metav1.DeleteOptions{})
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
-			framework.Failf("Gluster delete endpoints failed: %v", err)
+			framework.Failf("Gluster deleting endpoint %s failed: %v", nameSpaceName, err)
 		}
-		framework.Logf("Gluster endpoints %q not found, assuming deleted", name)
+		framework.Logf("Gluster endpoints %q not found, assuming deleted", nameSpaceName)
 	}
+
+	framework.Logf("Deleting Gluster service %s...", nameSpaceName)
+	err = cs.CoreV1().Services(ns.Name).Delete(context.TODO(), name, metav1.DeleteOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			framework.Failf("Gluster deleting service %s failed: %v", nameSpaceName, err)
+		}
+		framework.Logf("Gluster service %q not found, assuming deleted", nameSpaceName)
+	}
+
 	framework.Logf("Deleting Gluster server pod %q...", v.serverPod.Name)
 	err = e2epod.DeletePodWithWait(cs, v.serverPod)
 	if err != nil {
@@ -544,7 +556,7 @@ func InitRbdDriver() testsuites.TestDriver {
 			FeatureTag:       "[Feature:Volumes][Serial]",
 			MaxFileSize:      testpatterns.FileSizeMedium,
 			SupportedSizeRange: e2evolume.SizeRange{
-				Min: "5Gi",
+				Min: "1Gi",
 			},
 			SupportedFsType: sets.NewString(
 				"", // Default fsType
@@ -672,7 +684,7 @@ func InitCephFSDriver() testsuites.TestDriver {
 			FeatureTag:       "[Feature:Volumes][Serial]",
 			MaxFileSize:      testpatterns.FileSizeMedium,
 			SupportedSizeRange: e2evolume.SizeRange{
-				Min: "5Gi",
+				Min: "1Gi",
 			},
 			SupportedFsType: sets.NewString(
 				"", // Default fsType
@@ -1060,7 +1072,7 @@ func InitCinderDriver() testsuites.TestDriver {
 			InTreePluginName: "kubernetes.io/cinder",
 			MaxFileSize:      testpatterns.FileSizeMedium,
 			SupportedSizeRange: e2evolume.SizeRange{
-				Min: "5Gi",
+				Min: "1Gi",
 			},
 			SupportedFsType: sets.NewString(
 				"", // Default fsType
@@ -1234,7 +1246,7 @@ func InitGcePdDriver() testsuites.TestDriver {
 			InTreePluginName: "kubernetes.io/gce-pd",
 			MaxFileSize:      testpatterns.FileSizeMedium,
 			SupportedSizeRange: e2evolume.SizeRange{
-				Min: "5Gi",
+				Min: "1Gi",
 			},
 			SupportedFsType:      supportedTypes,
 			SupportedMountOption: sets.NewString("debug", "nouid32"),
@@ -1375,7 +1387,7 @@ func InitVSphereDriver() testsuites.TestDriver {
 			InTreePluginName: "kubernetes.io/vsphere-volume",
 			MaxFileSize:      testpatterns.FileSizeMedium,
 			SupportedSizeRange: e2evolume.SizeRange{
-				Min: "5Gi",
+				Min: "1Gi",
 			},
 			SupportedFsType: sets.NewString(
 				"", // Default fsType
@@ -1499,7 +1511,7 @@ func InitAzureDiskDriver() testsuites.TestDriver {
 			InTreePluginName: "kubernetes.io/azure-disk",
 			MaxFileSize:      testpatterns.FileSizeMedium,
 			SupportedSizeRange: e2evolume.SizeRange{
-				Min: "5Gi",
+				Min: "1Gi",
 			},
 			SupportedFsType: sets.NewString(
 				"", // Default fsType
@@ -1640,7 +1652,7 @@ func InitAwsDriver() testsuites.TestDriver {
 			InTreePluginName: "kubernetes.io/aws-ebs",
 			MaxFileSize:      testpatterns.FileSizeMedium,
 			SupportedSizeRange: e2evolume.SizeRange{
-				Min: "5Gi",
+				Min: "1Gi",
 			},
 			SupportedFsType: sets.NewString(
 				"", // Default fsType

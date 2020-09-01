@@ -262,8 +262,7 @@ type FilterPlugin interface {
 	// Filter is called by the scheduling framework.
 	// All FilterPlugins should return "Success" to declare that
 	// the given node fits the pod. If Filter doesn't return "Success",
-	// please refer scheduler/algorithm/predicates/error.go
-	// to set error message.
+	// it will return "Unschedulable", "UnschedulableAndUnresolvable" or "Error".
 	// For the node being evaluated, Filter plugins should look at the passed
 	// nodeInfo reference for this particular node's information (e.g., pods
 	// considered to be running on the node) instead of looking it up in the
@@ -324,21 +323,28 @@ type ScorePlugin interface {
 	ScoreExtensions() ScoreExtensions
 }
 
-// ReservePlugin is an interface for Reserve plugins. These plugins are called
-// at the reservation point. These are meant to update the state of the plugin.
-// This concept used to be called 'assume' in the original scheduler.
-// These plugins should return only Success or Error in Status.code. However,
-// the scheduler accepts other valid codes as well. Anything other than Success
-// will lead to rejection of the pod.
+// ReservePlugin is an interface for plugins with Reserve and Unreserve
+// methods. These are meant to update the state of the plugin. This concept
+// used to be called 'assume' in the original scheduler. These plugins should
+// return only Success or Error in Status.code. However, the scheduler accepts
+// other valid codes as well. Anything other than Success will lead to
+// rejection of the pod.
 type ReservePlugin interface {
 	Plugin
 	// Reserve is called by the scheduling framework when the scheduler cache is
-	// updated.
+	// updated. If this method returns a failed Status, the scheduler will call
+	// the Unreserve method for all enabled ReservePlugins.
 	Reserve(ctx context.Context, state *CycleState, p *v1.Pod, nodeName string) *Status
+	// Unreserve is called by the scheduling framework when a reserved pod was
+	// rejected, an error occurred during reservation of subsequent plugins, or
+	// in a later phase. The Unreserve method implementation must be idempotent
+	// and may be called by the scheduler even if the corresponding Reserve
+	// method for the same plugin was not called.
+	Unreserve(ctx context.Context, state *CycleState, p *v1.Pod, nodeName string)
 }
 
 // PreBindPlugin is an interface that must be implemented by "prebind" plugins.
-// These plugins are called before a pod being scheduled.
+// These plugins are called before a pod is bound.
 type PreBindPlugin interface {
 	Plugin
 	// PreBind is called before binding a pod. All prebind plugins must return
@@ -355,17 +361,6 @@ type PostBindPlugin interface {
 	// up. If a plugin needs to clean-up its state after a pod is scheduled and
 	// bound, PostBind is the extension point that it should register.
 	PostBind(ctx context.Context, state *CycleState, p *v1.Pod, nodeName string)
-}
-
-// UnreservePlugin is an interface for Unreserve plugins. This is an informational
-// extension point. If a pod was reserved and then rejected in a later phase, then
-// un-reserve plugins will be notified. Un-reserve plugins should clean up state
-// associated with the reserved Pod.
-type UnreservePlugin interface {
-	Plugin
-	// Unreserve is called by the scheduling framework when a reserved pod was
-	// rejected in a later phase.
-	Unreserve(ctx context.Context, state *CycleState, p *v1.Pod, nodeName string)
 }
 
 // PermitPlugin is an interface that must be implemented by "permit" plugins.
@@ -452,13 +447,15 @@ type Framework interface {
 	// RunPostBindPlugins runs the set of configured postbind plugins.
 	RunPostBindPlugins(ctx context.Context, state *CycleState, pod *v1.Pod, nodeName string)
 
-	// RunReservePlugins runs the set of configured reserve plugins. If any of these
-	// plugins returns an error, it does not continue running the remaining ones and
-	// returns the error. In such case, pod will not be scheduled.
-	RunReservePlugins(ctx context.Context, state *CycleState, pod *v1.Pod, nodeName string) *Status
+	// RunReservePluginsReserve runs the Reserve method of the set of
+	// configured reserve plugins. If any of these calls returns an error, it
+	// does not continue running the remaining ones and returns the error. In
+	// such case, pod will not be scheduled.
+	RunReservePluginsReserve(ctx context.Context, state *CycleState, pod *v1.Pod, nodeName string) *Status
 
-	// RunUnreservePlugins runs the set of configured unreserve plugins.
-	RunUnreservePlugins(ctx context.Context, state *CycleState, pod *v1.Pod, nodeName string)
+	// RunReservePluginsUnreserve runs the Unreserve method of the set of
+	// configured reserve plugins.
+	RunReservePluginsUnreserve(ctx context.Context, state *CycleState, pod *v1.Pod, nodeName string)
 
 	// RunPermitPlugins runs the set of configured permit plugins. If any of these
 	// plugins returns a status other than "Success" or "Wait", it does not continue
@@ -480,6 +477,9 @@ type Framework interface {
 
 	// HasFilterPlugins returns true if at least one filter plugin is defined.
 	HasFilterPlugins() bool
+
+	// HasPostFilterPlugins returns true if at least one postFilter plugin is defined.
+	HasPostFilterPlugins() bool
 
 	// HasScorePlugins returns true if at least one score plugin is defined.
 	HasScorePlugins() bool

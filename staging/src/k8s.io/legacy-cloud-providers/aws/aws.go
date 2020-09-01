@@ -257,6 +257,14 @@ const (
 	filterNodeLimit = 150
 )
 
+const (
+	// represents expected attachment status of a volume after attach
+	volumeAttachedStatus = "attached"
+
+	// represents expected attachment status of a volume after detach
+	volumeDetachedStatus = "detached"
+)
+
 // awsTagNameMasterRoles is a set of well-known AWS tag names that indicate the instance is a master
 // The major consequence is that it is then not considered for AWS zone discovery for dynamic volume creation.
 var awsTagNameMasterRoles = sets.NewString("kubernetes.io/role/master", "k8s.io/role/master")
@@ -1369,7 +1377,7 @@ func (c *Cloud) Initialize(clientBuilder cloudprovider.ControllerClientBuilder, 
 	c.clientBuilder = clientBuilder
 	c.kubeClient = clientBuilder.ClientOrDie("aws-cloud-provider")
 	c.eventBroadcaster = record.NewBroadcaster()
-	c.eventBroadcaster.StartLogging(klog.Infof)
+	c.eventBroadcaster.StartStructuredLogging(0)
 	c.eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: c.kubeClient.CoreV1().Events("")})
 	c.eventRecorder = c.eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "aws-cloud-provider"})
 }
@@ -1392,6 +1400,12 @@ func (c *Cloud) LoadBalancer() (cloudprovider.LoadBalancer, bool) {
 // Instances returns an implementation of Instances for Amazon Web Services.
 func (c *Cloud) Instances() (cloudprovider.Instances, bool) {
 	return c, true
+}
+
+// InstancesV2 returns an implementation of InstancesV2 for Amazon Web Services.
+// TODO: implement ONLY for external cloud provider
+func (c *Cloud) InstancesV2() (cloudprovider.InstancesV2, bool) {
+	return nil, false
 }
 
 // Zones returns an implementation of Zones for Amazon Web Services.
@@ -1663,31 +1677,6 @@ func (c *Cloud) InstanceShutdownByProviderID(ctx context.Context, providerID str
 		}
 	}
 	return false, nil
-}
-
-// InstanceMetadataByProviderID returns metadata of the specified instance.
-func (c *Cloud) InstanceMetadataByProviderID(ctx context.Context, providerID string) (*cloudprovider.InstanceMetadata, error) {
-	instanceID, err := KubernetesInstanceID(providerID).MapToAWSInstanceID()
-	if err != nil {
-		return nil, err
-	}
-
-	instance, err := describeInstance(c.ec2, instanceID)
-	if err != nil {
-		return nil, err
-	}
-
-	// TODO ignore checking whether `*instance.State.Name == ec2.InstanceStateNameTerminated` here.
-	// If not behave as expected, add it.
-	addresses, err := extractNodeAddresses(instance)
-	if err != nil {
-		return nil, err
-	}
-	return &cloudprovider.InstanceMetadata{
-		ProviderID:    providerID,
-		Type:          aws.StringValue(instance.InstanceType),
-		NodeAddresses: addresses,
-	}, nil
 }
 
 // InstanceID returns the cloud provider ID of the node with the specified nodeName.
@@ -1962,7 +1951,6 @@ func (c *Cloud) getMountDevice(
 				// AWS API returns consistent result next time (i.e. the volume is detached).
 				status := volumeStatus[mappingVolumeID]
 				klog.Warningf("Got assignment call for already-assigned volume: %s@%s, volume status: %s", mountDevice, mappingVolumeID, status)
-				return mountDevice, false, fmt.Errorf("volume is still being detached from the node")
 			}
 			return mountDevice, true, nil
 		}
@@ -2163,7 +2151,7 @@ func (c *Cloud) applyUnSchedulableTaint(nodeName types.NodeName, reason string) 
 
 // waitForAttachmentStatus polls until the attachment status is the expected value
 // On success, it returns the last attachment state.
-func (d *awsDisk) waitForAttachmentStatus(status string, expectedInstance, expectedDevice string) (*ec2.VolumeAttachment, error) {
+func (d *awsDisk) waitForAttachmentStatus(status string, expectedInstance, expectedDevice string, alreadyAttached bool) (*ec2.VolumeAttachment, error) {
 	backoff := wait.Backoff{
 		Duration: volumeAttachmentStatusPollDelay,
 		Factor:   volumeAttachmentStatusFactor,
@@ -2188,7 +2176,7 @@ func (d *awsDisk) waitForAttachmentStatus(status string, expectedInstance, expec
 		if err != nil {
 			// The VolumeNotFound error is special -- we don't need to wait for it to repeat
 			if isAWSErrorVolumeNotFound(err) {
-				if status == "detached" {
+				if status == volumeDetachedStatus {
 					// The disk doesn't exist, assume it's detached, log warning and stop waiting
 					klog.Warningf("Waiting for volume %q to be detached but the volume does not exist", d.awsID)
 					stateStr := "detached"
@@ -2197,7 +2185,7 @@ func (d *awsDisk) waitForAttachmentStatus(status string, expectedInstance, expec
 					}
 					return true, nil
 				}
-				if status == "attached" {
+				if status == volumeAttachedStatus {
 					// The disk doesn't exist, complain, give up waiting and report error
 					klog.Warningf("Waiting for volume %q to be attached but the volume does not exist", d.awsID)
 					return false, err
@@ -2232,7 +2220,7 @@ func (d *awsDisk) waitForAttachmentStatus(status string, expectedInstance, expec
 			}
 		}
 		if attachmentStatus == "" {
-			attachmentStatus = "detached"
+			attachmentStatus = volumeDetachedStatus
 		}
 		if attachment != nil {
 			// AWS eventual consistency can go back in time.
@@ -2259,6 +2247,13 @@ func (d *awsDisk) waitForAttachmentStatus(status string, expectedInstance, expec
 				}
 				return false, nil
 			}
+		}
+
+		// if we expected volume to be attached and it was reported as already attached via DescribeInstance call
+		// but DescribeVolume told us volume is detached, we will short-circuit this long wait loop and return error
+		// so as AttachDisk can be retried without waiting for 20 minutes.
+		if (status == volumeAttachedStatus) && alreadyAttached && (attachmentStatus != status) {
+			return false, fmt.Errorf("attachment of disk %q failed, expected device to be attached but was %s", d.name, attachmentStatus)
 		}
 
 		if attachmentStatus == status {
@@ -2406,7 +2401,7 @@ func (c *Cloud) AttachDisk(diskName KubernetesVolumeID, nodeName types.NodeName)
 		klog.V(2).Infof("AttachVolume volume=%q instance=%q request returned %v", disk.awsID, awsInstance.awsID, attachResponse)
 	}
 
-	attachment, err := disk.waitForAttachmentStatus("attached", awsInstance.awsID, ec2Device)
+	attachment, err := disk.waitForAttachmentStatus("attached", awsInstance.awsID, ec2Device, alreadyAttached)
 
 	if err != nil {
 		if err == wait.ErrWaitTimeout {
@@ -2484,7 +2479,7 @@ func (c *Cloud) DetachDisk(diskName KubernetesVolumeID, nodeName types.NodeName)
 		return "", errors.New("no response from DetachVolume")
 	}
 
-	attachment, err := diskInfo.disk.waitForAttachmentStatus("detached", awsInstance.awsID, "")
+	attachment, err := diskInfo.disk.waitForAttachmentStatus("detached", awsInstance.awsID, "", false)
 	if err != nil {
 		return "", err
 	}
@@ -3603,6 +3598,37 @@ func (c *Cloud) buildELBSecurityGroupList(serviceName types.NamespacedName, load
 	return sgList, setupSg, nil
 }
 
+// sortELBSecurityGroupList returns a list of sorted securityGroupIDs based on the original order
+// from buildELBSecurityGroupList. The logic is:
+//  * securityGroups specified by ServiceAnnotationLoadBalancerSecurityGroups appears first in order
+//  * securityGroups specified by ServiceAnnotationLoadBalancerExtraSecurityGroups appears last in order
+func (c *Cloud) sortELBSecurityGroupList(securityGroupIDs []string, annotations map[string]string) {
+	annotatedSGList := getSGListFromAnnotation(annotations[ServiceAnnotationLoadBalancerSecurityGroups])
+	annotatedExtraSGList := getSGListFromAnnotation(annotations[ServiceAnnotationLoadBalancerExtraSecurityGroups])
+	annotatedSGIndex := make(map[string]int, len(annotatedSGList))
+	annotatedExtraSGIndex := make(map[string]int, len(annotatedExtraSGList))
+
+	for i, sgID := range annotatedSGList {
+		annotatedSGIndex[sgID] = i
+	}
+	for i, sgID := range annotatedExtraSGList {
+		annotatedExtraSGIndex[sgID] = i
+	}
+	sgOrderMapping := make(map[string]int, len(securityGroupIDs))
+	for _, sgID := range securityGroupIDs {
+		if i, ok := annotatedSGIndex[sgID]; ok {
+			sgOrderMapping[sgID] = i
+		} else if j, ok := annotatedExtraSGIndex[sgID]; ok {
+			sgOrderMapping[sgID] = len(annotatedSGIndex) + 1 + j
+		} else {
+			sgOrderMapping[sgID] = len(annotatedSGIndex)
+		}
+	}
+	sort.Slice(securityGroupIDs, func(i, j int) bool {
+		return sgOrderMapping[securityGroupIDs[i]] < sgOrderMapping[securityGroupIDs[j]]
+	})
+}
+
 // buildListener creates a new listener from the given port, adding an SSL certificate
 // if indicated by the appropriate annotations.
 func buildListener(port v1.ServicePort, annotations map[string]string, sslPorts *portSets) (*elb.Listener, error) {
@@ -3639,9 +3665,33 @@ func buildListener(port v1.ServicePort, annotations map[string]string, sslPorts 
 	return listener, nil
 }
 
+func (c *Cloud) getSubnetCidrs(subnetIDs []string) ([]string, error) {
+	request := &ec2.DescribeSubnetsInput{}
+	for _, subnetID := range subnetIDs {
+		request.SubnetIds = append(request.SubnetIds, aws.String(subnetID))
+	}
+
+	subnets, err := c.ec2.DescribeSubnets(request)
+	if err != nil {
+		return nil, fmt.Errorf("error querying Subnet for ELB: %q", err)
+	}
+	if len(subnets) != len(subnetIDs) {
+		return nil, fmt.Errorf("error querying Subnet for ELB, got %d subnets for %v", len(subnets), subnetIDs)
+	}
+
+	cidrs := make([]string, 0, len(subnets))
+	for _, subnet := range subnets {
+		cidrs = append(cidrs, aws.StringValue(subnet.CidrBlock))
+	}
+	return cidrs, nil
+}
+
 // EnsureLoadBalancer implements LoadBalancer.EnsureLoadBalancer
 func (c *Cloud) EnsureLoadBalancer(ctx context.Context, clusterName string, apiService *v1.Service, nodes []*v1.Node) (*v1.LoadBalancerStatus, error) {
 	annotations := apiService.Annotations
+	if isLBExternal(annotations) {
+		return nil, cloudprovider.ImplementedElsewhere
+	}
 	klog.V(2).Infof("EnsureLoadBalancer(%v, %v, %v, %v, %v, %v, %v)",
 		clusterName, apiService.Namespace, apiService.Name, c.region, apiService.Spec.LoadBalancerIP, apiService.Spec.Ports, annotations)
 
@@ -3653,16 +3703,16 @@ func (c *Cloud) EnsureLoadBalancer(ctx context.Context, clusterName string, apiS
 	if len(apiService.Spec.Ports) == 0 {
 		return nil, fmt.Errorf("requested load balancer with no ports")
 	}
-
 	// Figure out what mappings we want on the load balancer
 	listeners := []*elb.Listener{}
 	v2Mappings := []nlbPortMapping{}
 
 	sslPorts := getPortSets(annotations[ServiceAnnotationLoadBalancerSSLPorts])
 	for _, port := range apiService.Spec.Ports {
-		if port.Protocol != v1.ProtocolTCP {
-			return nil, fmt.Errorf("Only TCP LoadBalancer is supported for AWS ELB")
+		if err := checkProtocol(port, annotations); err != nil {
+			return nil, err
 		}
+
 		if port.NodePort == 0 {
 			klog.Errorf("Ignoring port without NodePort defined: %v", port)
 			continue
@@ -3682,7 +3732,7 @@ func (c *Cloud) EnsureLoadBalancer(ctx context.Context, clusterName string, apiS
 			}
 
 			certificateARN := annotations[ServiceAnnotationLoadBalancerCertificate]
-			if certificateARN != "" && (sslPorts == nil || sslPorts.numbers.Has(int64(port.Port)) || sslPorts.names.Has(port.Name)) {
+			if port.Protocol != v1.ProtocolUDP && certificateARN != "" && (sslPorts == nil || sslPorts.numbers.Has(int64(port.Port)) || sslPorts.names.Has(port.Name)) {
 				portMapping.FrontendProtocol = elbv2.ProtocolEnumTls
 				portMapping.SSLCertificateARN = certificateARN
 				portMapping.SSLPolicy = annotations[ServiceAnnotationLoadBalancerSSLNegotiationPolicy]
@@ -3693,12 +3743,13 @@ func (c *Cloud) EnsureLoadBalancer(ctx context.Context, clusterName string, apiS
 			}
 
 			v2Mappings = append(v2Mappings, portMapping)
+		} else {
+			listener, err := buildListener(port, annotations, sslPorts)
+			if err != nil {
+				return nil, err
+			}
+			listeners = append(listeners, listener)
 		}
-		listener, err := buildListener(port, annotations, sslPorts)
-		if err != nil {
-			return nil, err
-		}
-		listeners = append(listeners, listener)
 	}
 
 	if apiService.Spec.LoadBalancerIP != "" {
@@ -3766,6 +3817,12 @@ func (c *Cloud) EnsureLoadBalancer(ctx context.Context, clusterName string, apiS
 			return nil, err
 		}
 
+		subnetCidrs, err := c.getSubnetCidrs(subnetIDs)
+		if err != nil {
+			klog.Errorf("Error getting subnet cidrs: %q", err)
+			return nil, err
+		}
+
 		sourceRangeCidrs := []string{}
 		for cidr := range sourceRanges {
 			sourceRangeCidrs = append(sourceRangeCidrs, cidr)
@@ -3774,7 +3831,7 @@ func (c *Cloud) EnsureLoadBalancer(ctx context.Context, clusterName string, apiS
 			sourceRangeCidrs = append(sourceRangeCidrs, "0.0.0.0/0")
 		}
 
-		err = c.updateInstanceSecurityGroupsForNLB(loadBalancerName, instances, sourceRangeCidrs, v2Mappings)
+		err = c.updateInstanceSecurityGroupsForNLB(loadBalancerName, instances, subnetCidrs, sourceRangeCidrs, v2Mappings)
 		if err != nil {
 			klog.Warningf("Error opening ingress rules for the load balancer to the instances: %q", err)
 			return nil, err
@@ -4015,7 +4072,7 @@ func (c *Cloud) EnsureLoadBalancer(ctx context.Context, clusterName string, apiS
 		}
 	}
 
-	err = c.updateInstanceSecurityGroupsForLoadBalancer(loadBalancer, instances)
+	err = c.updateInstanceSecurityGroupsForLoadBalancer(loadBalancer, instances, annotations)
 	if err != nil {
 		klog.Warningf("Error opening ingress rules for the load balancer to the instances: %q", err)
 		return nil, err
@@ -4037,6 +4094,9 @@ func (c *Cloud) EnsureLoadBalancer(ctx context.Context, clusterName string, apiS
 
 // GetLoadBalancer is an implementation of LoadBalancer.GetLoadBalancer
 func (c *Cloud) GetLoadBalancer(ctx context.Context, clusterName string, service *v1.Service) (*v1.LoadBalancerStatus, bool, error) {
+	if isLBExternal(service.Annotations) {
+		return nil, false, nil
+	}
 	loadBalancerName := c.GetLoadBalancerName(ctx, clusterName, service)
 
 	if isNLB(service.Annotations) {
@@ -4173,26 +4233,18 @@ func (c *Cloud) getTaggedSecurityGroups() (map[string]*ec2.SecurityGroup, error)
 
 // Open security group ingress rules on the instances so that the load balancer can talk to them
 // Will also remove any security groups ingress rules for the load balancer that are _not_ needed for allInstances
-func (c *Cloud) updateInstanceSecurityGroupsForLoadBalancer(lb *elb.LoadBalancerDescription, instances map[InstanceID]*ec2.Instance) error {
+func (c *Cloud) updateInstanceSecurityGroupsForLoadBalancer(lb *elb.LoadBalancerDescription, instances map[InstanceID]*ec2.Instance, annotations map[string]string) error {
 	if c.cfg.Global.DisableSecurityGroupIngress {
 		return nil
 	}
 
 	// Determine the load balancer security group id
-	loadBalancerSecurityGroupID := ""
-	for _, securityGroup := range lb.SecurityGroups {
-		if aws.StringValue(securityGroup) == "" {
-			continue
-		}
-		if loadBalancerSecurityGroupID != "" {
-			// We create LBs with one SG
-			klog.Warningf("Multiple security groups for load balancer: %q", aws.StringValue(lb.LoadBalancerName))
-		}
-		loadBalancerSecurityGroupID = *securityGroup
-	}
-	if loadBalancerSecurityGroupID == "" {
+	lbSecurityGroupIDs := aws.StringValueSlice(lb.SecurityGroups)
+	if len(lbSecurityGroupIDs) == 0 {
 		return fmt.Errorf("could not determine security group for load balancer: %s", aws.StringValue(lb.LoadBalancerName))
 	}
+	c.sortELBSecurityGroupList(lbSecurityGroupIDs, annotations)
+	loadBalancerSecurityGroupID := lbSecurityGroupIDs[0]
 
 	// Get the actual list of groups that allow ingress from the load-balancer
 	var actualGroups []*ec2.SecurityGroup
@@ -4305,6 +4357,9 @@ func (c *Cloud) updateInstanceSecurityGroupsForLoadBalancer(lb *elb.LoadBalancer
 
 // EnsureLoadBalancerDeleted implements LoadBalancer.EnsureLoadBalancerDeleted.
 func (c *Cloud) EnsureLoadBalancerDeleted(ctx context.Context, clusterName string, service *v1.Service) error {
+	if isLBExternal(service.Annotations) {
+		return nil
+	}
 	loadBalancerName := c.GetLoadBalancerName(ctx, clusterName, service)
 
 	if isNLB(service.Annotations) {
@@ -4353,7 +4408,7 @@ func (c *Cloud) EnsureLoadBalancerDeleted(ctx context.Context, clusterName strin
 			}
 		}
 
-		return c.updateInstanceSecurityGroupsForNLB(loadBalancerName, nil, nil, nil)
+		return c.updateInstanceSecurityGroupsForNLB(loadBalancerName, nil, nil, nil, nil)
 	}
 
 	lb, err := c.describeLoadBalancer(loadBalancerName)
@@ -4368,7 +4423,7 @@ func (c *Cloud) EnsureLoadBalancerDeleted(ctx context.Context, clusterName strin
 
 	{
 		// De-authorize the load balancer security group from the instances security group
-		err = c.updateInstanceSecurityGroupsForLoadBalancer(lb, nil)
+		err = c.updateInstanceSecurityGroupsForLoadBalancer(lb, nil, service.Annotations)
 		if err != nil {
 			klog.Errorf("Error deregistering load balancer from instance security groups: %q", err)
 			return err
@@ -4489,11 +4544,13 @@ func (c *Cloud) EnsureLoadBalancerDeleted(ctx context.Context, clusterName strin
 
 // UpdateLoadBalancer implements LoadBalancer.UpdateLoadBalancer
 func (c *Cloud) UpdateLoadBalancer(ctx context.Context, clusterName string, service *v1.Service, nodes []*v1.Node) error {
+	if isLBExternal(service.Annotations) {
+		return cloudprovider.ImplementedElsewhere
+	}
 	instances, err := c.findInstancesForELB(nodes, service.Annotations)
 	if err != nil {
 		return err
 	}
-
 	loadBalancerName := c.GetLoadBalancerName(ctx, clusterName, service)
 	if isNLB(service.Annotations) {
 		lb, err := c.describeLoadBalancerv2(loadBalancerName)
@@ -4533,7 +4590,7 @@ func (c *Cloud) UpdateLoadBalancer(ctx context.Context, clusterName string, serv
 		return nil
 	}
 
-	err = c.updateInstanceSecurityGroupsForLoadBalancer(lb, instances)
+	err = c.updateInstanceSecurityGroupsForLoadBalancer(lb, instances, service.Annotations)
 	if err != nil {
 		return err
 	}
@@ -4739,6 +4796,18 @@ func (c *Cloud) nodeNameToProviderID(nodeName types.NodeName) (InstanceID, error
 	return KubernetesInstanceID(node.Spec.ProviderID).MapToAWSInstanceID()
 }
 
+func checkProtocol(port v1.ServicePort, annotations map[string]string) error {
+	// nlb supports tcp, udp
+	if isNLB(annotations) && (port.Protocol == v1.ProtocolTCP || port.Protocol == v1.ProtocolUDP) {
+		return nil
+	}
+	// elb only supports tcp
+	if !isNLB(annotations) && port.Protocol == v1.ProtocolTCP {
+		return nil
+	}
+	return fmt.Errorf("Protocol %s not supported by LoadBalancer", port.Protocol)
+}
+
 func setNodeDisk(
 	nodeDiskMap map[types.NodeName]map[KubernetesVolumeID]bool,
 	volumeID KubernetesVolumeID,
@@ -4755,7 +4824,7 @@ func setNodeDisk(
 }
 
 func getInitialAttachDetachDelay(status string) time.Duration {
-	if status == "detached" {
+	if status == volumeDetachedStatus {
 		return volumeDetachmentStatusInitialDelay
 	}
 	return volumeAttachmentStatusInitialDelay

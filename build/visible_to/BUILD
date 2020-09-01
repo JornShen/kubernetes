@@ -238,7 +238,6 @@ package_group(
         "//pkg/kubectl/cmd",
         "//pkg/kubectl/cmd/auth",
         "//pkg/kubectl/cmd/convert",
-        "//pkg/kubectl/cmd/cp",
         "//pkg/kubectl/explain",
         "//staging/src/k8s.io/kubectl/pkg/cmd",
         "//staging/src/k8s.io/kubectl/pkg/cmd/annotate",
@@ -430,7 +429,7 @@ package_group(
     name = "vendor_githubcom_prometheus_CONSUMERS",
     packages = [
         "//cluster/images/etcd-version-monitor",
-        "//pkg/scheduler/framework/v1alpha1",
+        "//pkg/scheduler/framework/runtime",
         "//pkg/volume/util/operationexecutor",
         "//staging/src/k8s.io/apiserver/pkg/admission/metrics",
         "//staging/src/k8s.io/component-base/metrics/...",

@@ -160,9 +160,15 @@ func (pl *InterPodAffinity) PreScore(
 		}
 	}
 
+	podInfo := framework.NewPodInfo(pod)
+	if podInfo.ParseError != nil {
+		// Ideally we never reach here, because errors will be caught by PreFilter
+		return framework.NewStatus(framework.Error, fmt.Sprintf("parsing pod: %+v", podInfo.ParseError))
+	}
+
 	state := &preScoreState{
 		topologyScore: make(map[string]map[string]int64),
-		podInfo:       framework.NewPodInfo(pod),
+		podInfo:       podInfo,
 	}
 
 	topoScores := make([]scoreMap, len(allNodes))
@@ -212,8 +218,9 @@ func getPreScoreState(cycleState *framework.CycleState) (*preScoreState, error) 
 }
 
 // Score invoked at the Score extension point.
-// The "score" returned in this function is the matching number of pods on the `nodeName`,
+// The "score" returned in this function is the sum of weights got from cycleState which have its topologyKey matching with the node's labels.
 // it is normalized later.
+// Note: the returned "score" is positive for pod-affinity, and negative for pod-antiaffinity.
 func (pl *InterPodAffinity) Score(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
 	nodeInfo, err := pl.sharedLister.NodeInfos().Get(nodeName)
 	if err != nil || nodeInfo.Node() == nil {
@@ -236,8 +243,6 @@ func (pl *InterPodAffinity) Score(ctx context.Context, cycleState *framework.Cyc
 }
 
 // NormalizeScore normalizes the score for each filteredNode.
-// The basic rule is: the bigger the score(matching number of pods) is, the smaller the
-// final normalized score will be.
 func (pl *InterPodAffinity) NormalizeScore(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod, scores framework.NodeScoreList) *framework.Status {
 	s, err := getPreScoreState(cycleState)
 	if err != nil {

@@ -144,6 +144,18 @@ run_kubectl_apply_tests() {
 }
 __EOF__
 
+  # Ensure the API server has recognized and started serving the associated CR API
+  local tries=5
+  for i in $(seq 1 $tries); do
+      local output
+      output=$(kubectl "${kube_flags[@]:?}" api-resources --api-group mygroup.example.com -oname)
+      if kube::test::if_has_string "$output" resources.mygroup.example.com; then
+          break
+      fi
+      echo "${i}: Waiting for CR API to be available"
+      sleep "$i"
+  done
+
   # Dry-run create the CR
   kubectl "${kube_flags[@]:?}" apply --dry-run=server -f hack/testdata/CRD/resource.yaml "${kube_flags[@]:?}"
   # Make sure that the CR doesn't exist
@@ -393,6 +405,34 @@ run_kubectl_server_side_apply_tests() {
   # clean-up
   kubectl delete -f hack/testdata/pod.yaml "${kube_flags[@]:?}"
 
+  ## kubectl apply upgrade
+  # Pre-Condition: no POD exists
+  kube::test::get_object_assert pods "{{range.items}}{{${id_field:?}}}:{{end}}" ''
+
+  kube::log::status "Testing upgrade kubectl client-side apply to server-side apply"
+  # run client-side apply
+  kubectl apply -f hack/testdata/pod.yaml "${kube_flags[@]:?}"
+  # test upgrade does not work with non-standard server-side apply field manager
+  ! kubectl apply --server-side --field-manager="not-kubectl" -f hack/testdata/pod-apply.yaml "${kube_flags[@]:?}" || exit 1
+  # test upgrade from client-side apply to server-side apply
+  kubectl apply --server-side -f hack/testdata/pod-apply.yaml "${kube_flags[@]:?}"
+  # Post-Condition: pod "test-pod" has configuration annotation
+  grep -q kubectl.kubernetes.io/last-applied-configuration <<< "$(kubectl get pods test-pod -o yaml "${kube_flags[@]:?}")"
+  output_message=$(kubectl apply view-last-applied pod/test-pod -o json 2>&1 "${kube_flags[@]:?}")
+  kube::test::if_has_string "${output_message}" '"name": "test-pod-applied"'
+
+  kube::log::status "Testing downgrade kubectl server-side apply to client-side apply"
+  # test downgrade from server-side apply to client-side apply
+  kubectl apply --server-side -f hack/testdata/pod.yaml "${kube_flags[@]:?}"
+  # Post-Condition: pod "test-pod" has configuration annotation
+  grep -q kubectl.kubernetes.io/last-applied-configuration <<< "$(kubectl get pods test-pod -o yaml "${kube_flags[@]:?}")"
+  output_message=$(kubectl apply view-last-applied pod/test-pod -o json 2>&1 "${kube_flags[@]:?}")
+  kube::test::if_has_string "${output_message}" '"name": "test-pod-label"'
+  kubectl apply -f hack/testdata/pod-apply.yaml "${kube_flags[@]:?}"
+
+  # clean-up
+  kubectl delete -f hack/testdata/pod.yaml "${kube_flags[@]:?}"
+
   ## kubectl apply dry-run on CR
   # Create CRD
   kubectl "${kube_flags_with_token[@]}" create -f - << __EOF__
@@ -415,6 +455,18 @@ run_kubectl_server_side_apply_tests() {
   }
 }
 __EOF__
+
+  # Ensure the API server has recognized and started serving the associated CR API
+  local tries=5
+  for i in $(seq 1 $tries); do
+      local output
+      output=$(kubectl "${kube_flags[@]:?}" api-resources --api-group mygroup.example.com -oname)
+      if kube::test::if_has_string "$output" resources.mygroup.example.com; then
+          break
+      fi
+      echo "${i}: Waiting for CR API to be available"
+      sleep "$i"
+  done
 
   # Dry-run create the CR
   kubectl "${kube_flags[@]:?}" apply --server-side --dry-run=server -f hack/testdata/CRD/resource.yaml "${kube_flags[@]:?}"

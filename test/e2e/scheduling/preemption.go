@@ -97,18 +97,21 @@ var _ = SIGDescribe("SchedulerPreemption [Serial]", func() {
 		}
 
 		e2enode.WaitForTotalHealthy(cs, time.Minute)
-		masterNodes, nodeList, err = e2enode.GetMasterAndWorkerNodes(cs)
+		nodeList, err = e2enode.GetReadySchedulableNodes(cs)
 		if err != nil {
 			framework.Logf("Unexpected error occurred: %v", err)
 		}
 		framework.ExpectNoErrorWithOffset(0, err)
+		for _, n := range nodeList.Items {
+			workerNodes.Insert(n.Name)
+		}
 
 		err = framework.CheckTestingNSDeletedExcept(cs, ns)
 		framework.ExpectNoError(err)
 	})
 
 	/*
-		Release : v1.19
+		Release: v1.19
 		Testname: Scheduler, Basic Preemption
 		Description: When a higher priority pod is created and no node with enough
 		resources is found, the scheduler MUST preempt a lower priority pod and
@@ -196,7 +199,7 @@ var _ = SIGDescribe("SchedulerPreemption [Serial]", func() {
 	})
 
 	/*
-		Release : v1.19
+		Release: v1.19
 		Testname: Scheduler, Preemption for critical pod
 		Description: When a critical pod is created and no node with enough
 		resources is found, the scheduler MUST preempt a lower priority pod to

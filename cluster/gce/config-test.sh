@@ -106,7 +106,7 @@ if [[ "${CONTAINER_RUNTIME}" == "docker" ]]; then
   export CONTAINER_RUNTIME_ENDPOINT=${KUBE_CONTAINER_RUNTIME_ENDPOINT:-unix:///var/run/dockershim.sock}
   export CONTAINER_RUNTIME_NAME=${KUBE_CONTAINER_RUNTIME_NAME:-docker}
   export LOAD_IMAGE_COMMAND=${KUBE_LOAD_IMAGE_COMMAND:-}
-elif [[ "${CONTAINER_RUNTIME}" == "containerd" ]]; then
+elif [[ "${CONTAINER_RUNTIME}" == "containerd" || "${CONTAINER_RUNTIME}" == "remote" ]]; then
   export CONTAINER_RUNTIME_ENDPOINT=${KUBE_CONTAINER_RUNTIME_ENDPOINT:-unix:///run/containerd/containerd.sock}
   export CONTAINER_RUNTIME_NAME=${KUBE_CONTAINER_RUNTIME_NAME:-containerd}
   export LOAD_IMAGE_COMMAND=${KUBE_LOAD_IMAGE_COMMAND:-ctr -n=k8s.io images import}
@@ -202,7 +202,7 @@ HEAPSTER_MACHINE_TYPE=${HEAPSTER_MACHINE_TYPE:-}
 NUM_ADDITIONAL_NODES=${NUM_ADDITIONAL_NODES:-}
 ADDITIONAL_MACHINE_TYPE=${ADDITIONAL_MACHINE_TYPE:-}
 
-# Set etcd image (e.g. k8s.gcr.io/etcd) and version (e.g. 3.4.7-0) if you need
+# Set etcd image (e.g. k8s.gcr.io/etcd) and version (e.g. 3.4.9-1) if you need
 # non-default version.
 export ETCD_IMAGE=${TEST_ETCD_IMAGE:-}
 export ETCD_DOCKER_REPOSITORY=${TEST_ETCD_DOCKER_REPOSITORY:-}
@@ -228,10 +228,10 @@ TEST_CLUSTER_API_CONTENT_TYPE=${TEST_CLUSTER_API_CONTENT_TYPE:-}
 
 KUBELET_TEST_ARGS="${KUBELET_TEST_ARGS:-} --serialize-image-pulls=false ${TEST_CLUSTER_API_CONTENT_TYPE}"
 if [[ "${NODE_OS_DISTRIBUTION}" = 'gci' ]] || [[ "${NODE_OS_DISTRIBUTION}" = 'ubuntu' ]] || [[ "${NODE_OS_DISTRIBUTION}" = 'custom' ]]; then
-  NODE_KUBELET_TEST_ARGS="${NODE_KUBELET_TEST_ARGS:-} --experimental-kernel-memcg-notification=true"
+  NODE_KUBELET_TEST_ARGS="${NODE_KUBELET_TEST_ARGS:-} --kernel-memcg-notification=true"
 fi
 if [[ "${MASTER_OS_DISTRIBUTION}" = 'gci' ]] || [[ "${MASTER_OS_DISTRIBUTION}" = 'ubuntu' ]]; then
-  MASTER_KUBELET_TEST_ARGS="${MASTER_KUBELET_TEST_ARGS:-} --experimental-kernel-memcg-notification=true"
+  MASTER_KUBELET_TEST_ARGS="${MASTER_KUBELET_TEST_ARGS:-} --kernel-memcg-notification=true"
 fi
 APISERVER_TEST_ARGS="${APISERVER_TEST_ARGS:-} --runtime-config=extensions/v1beta1,scheduling.k8s.io/v1alpha1,settings.k8s.io/v1alpha1 ${TEST_CLUSTER_DELETE_COLLECTION_WORKERS} ${TEST_CLUSTER_MAX_REQUESTS_INFLIGHT}"
 CONTROLLER_MANAGER_TEST_ARGS="${CONTROLLER_MANAGER_TEST_ARGS:-} ${TEST_CLUSTER_RESYNC_PERIOD} ${TEST_CLUSTER_API_CONTENT_TYPE}"
