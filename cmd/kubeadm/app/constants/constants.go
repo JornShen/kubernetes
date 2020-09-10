@@ -265,7 +265,7 @@ const (
 	MinExternalEtcdVersion = "3.2.18"
 
 	// DefaultEtcdVersion indicates the default etcd version that kubeadm uses
-	DefaultEtcdVersion = "3.4.9-1"
+	DefaultEtcdVersion = "3.4.13-0"
 
 	// Etcd defines variable used internally when referring to etcd component
 	Etcd = "etcd"
@@ -350,6 +350,10 @@ const (
 	// ControlPlaneNumCPU is the number of CPUs required on control-plane
 	ControlPlaneNumCPU = 2
 
+	// ControlPlaneMem is the number of megabytes of memory required on the control-plane
+	// Below that amount of RAM running a stable control plane would be difficult.
+	ControlPlaneMem = 1700
+
 	// KubeadmCertsSecret specifies in what Secret in the kube-system namespace the certificates should be stored
 	KubeadmCertsSecret = "kubeadm-certs"
 
@@ -417,13 +421,13 @@ var (
 	ControlPlaneComponents = []string{KubeAPIServer, KubeControllerManager, KubeScheduler}
 
 	// MinimumControlPlaneVersion specifies the minimum control plane version kubeadm can deploy
-	MinimumControlPlaneVersion = version.MustParseSemantic("v1.18.0")
+	MinimumControlPlaneVersion = version.MustParseSemantic("v1.19.0")
 
 	// MinimumKubeletVersion specifies the minimum version of kubelet which kubeadm supports
-	MinimumKubeletVersion = version.MustParseSemantic("v1.18.0")
+	MinimumKubeletVersion = version.MustParseSemantic("v1.19.0")
 
 	// CurrentKubernetesVersion specifies current Kubernetes version supported by kubeadm
-	CurrentKubernetesVersion = version.MustParseSemantic("v1.19.0")
+	CurrentKubernetesVersion = version.MustParseSemantic("v1.20.0")
 
 	// SupportedEtcdVersion lists officially supported etcd versions with corresponding Kubernetes releases
 	SupportedEtcdVersion = map[uint8]string{
@@ -434,7 +438,8 @@ var (
 		17: "3.4.3-0",
 		18: "3.4.3-0",
 		19: "3.4.9-1",
-		20: "3.4.9-1",
+		20: "3.4.13-0",
+		21: "3.4.13-0",
 	}
 
 	// KubeadmCertsClusterRoleName sets the name for the ClusterRole that allows

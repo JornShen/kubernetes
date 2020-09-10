@@ -8,7 +8,7 @@ pkg/apis/abac/v1beta1
 pkg/apis/admission
 pkg/apis/admissionregistration/v1
 pkg/apis/admissionregistration/v1beta1
-pkg/apis/admissionregistration/validation
+pkg/apis/apiserverinternal
 pkg/apis/apps/v1
 pkg/apis/apps/v1beta1
 pkg/apis/apps/v1beta2
@@ -76,7 +76,6 @@ pkg/controller/replicaset
 pkg/controller/replicaset/config/v1alpha1
 pkg/controller/replication
 pkg/controller/replication/config/v1alpha1
-pkg/controller/resourcequota
 pkg/controller/resourcequota/config/v1alpha1
 pkg/controller/service/config/v1alpha1
 pkg/controller/serviceaccount/config/v1alpha1
@@ -91,6 +90,8 @@ pkg/controller/volume/attachdetach/testing
 pkg/controller/volume/expand
 pkg/controller/volume/persistentvolume
 pkg/controller/volume/persistentvolume/config/v1alpha1
+pkg/controlplane/controller/crdregistration
+pkg/controlplane/tunneler
 pkg/features
 pkg/kubeapiserver
 pkg/kubectl/cmd/convert
@@ -111,8 +112,6 @@ pkg/kubelet/stats
 pkg/kubelet/sysctl
 pkg/kubelet/types
 pkg/kubemark
-pkg/master/controller/crdregistration
-pkg/master/tunneler
 pkg/proxy/apis/config
 pkg/proxy/apis/config/v1alpha1
 pkg/proxy/userspace
@@ -187,7 +186,6 @@ pkg/util/removeall
 pkg/util/selinux
 pkg/util/taints
 pkg/volume
-pkg/volume/azure_dd
 pkg/volume/azure_file
 pkg/volume/csi/fake
 pkg/volume/git_repo
@@ -207,6 +205,7 @@ staging/src/k8s.io/api/admission/v1
 staging/src/k8s.io/api/admission/v1beta1
 staging/src/k8s.io/api/admissionregistration/v1
 staging/src/k8s.io/api/admissionregistration/v1beta1
+staging/src/k8s.io/api/apiserverinternal/v1alpha1
 staging/src/k8s.io/api/apps/v1
 staging/src/k8s.io/api/apps/v1beta1
 staging/src/k8s.io/api/apps/v1beta2
@@ -305,8 +304,6 @@ staging/src/k8s.io/apiserver/pkg/apis/apiserver
 staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1
 staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1alpha1
 staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1beta1
-staging/src/k8s.io/apiserver/pkg/apis/apiserverinternal
-staging/src/k8s.io/apiserver/pkg/apis/apiserverinternal/v1alpha1
 staging/src/k8s.io/apiserver/pkg/apis/audit
 staging/src/k8s.io/apiserver/pkg/apis/audit/v1
 staging/src/k8s.io/apiserver/pkg/apis/audit/v1alpha1
@@ -384,7 +381,6 @@ staging/src/k8s.io/client-go/discovery
 staging/src/k8s.io/client-go/discovery/fake
 staging/src/k8s.io/client-go/dynamic
 staging/src/k8s.io/client-go/dynamic/fake
-staging/src/k8s.io/client-go/examples/workqueue
 staging/src/k8s.io/client-go/kubernetes/typed/certificates/v1beta1
 staging/src/k8s.io/client-go/kubernetes/typed/certificates/v1beta1/fake
 staging/src/k8s.io/client-go/kubernetes/typed/core/v1
@@ -488,6 +484,7 @@ staging/src/k8s.io/metrics/pkg/client/custom_metrics/fake
 staging/src/k8s.io/metrics/pkg/client/custom_metrics/scheme
 staging/src/k8s.io/metrics/pkg/client/external_metrics
 staging/src/k8s.io/metrics/pkg/client/external_metrics/fake
+staging/src/k8s.io/mount-utils
 staging/src/k8s.io/sample-apiserver/pkg/admission/wardleinitializer
 staging/src/k8s.io/sample-apiserver/pkg/apis/wardle/v1alpha1
 staging/src/k8s.io/sample-apiserver/pkg/registry/wardle/fischer
