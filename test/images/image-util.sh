@@ -140,7 +140,7 @@ build() {
         if [[ $(id -u) != 0 ]]; then
           sudo=sudo
         fi
-        ${sudo} "${KUBE_ROOT}/third_party/multiarch/qemu-user-static/register/register.sh" --reset
+        ${sudo} "${KUBE_ROOT}/third_party/multiarch/qemu-user-static/register/register.sh" --reset -p yes
         curl -sSL https://github.com/multiarch/qemu-user-static/releases/download/"${QEMUVERSION}"/x86_64_qemu-"${QEMUARCHS[$arch]}"-static.tar.gz | tar -xz -C "${temp_dir}"
         # Ensure we don't get surprised by umask settings
         chmod 0755 "${temp_dir}/qemu-${QEMUARCHS[$arch]}-static"
@@ -158,7 +158,7 @@ build() {
       docker --tlsverify --tlscacert "${DOCKER_CERT_BASE_PATH}/.docker-${os_version}/ca.pem" \
         --tlscert "${DOCKER_CERT_BASE_PATH}/.docker-${os_version}/cert.pem" --tlskey "${DOCKER_CERT_BASE_PATH}/.docker-${os_version}/key.pem" \
         -H "${REMOTE_DOCKER_URL}" build --pull -t "${REGISTRY}/${image}:${TAG}-${os_name}-${arch}-${os_version}" \
-        --build-arg BASEIMAGE="${BASEIMAGE}" -f $dockerfile_name .
+        --build-arg BASEIMAGE="${BASEIMAGE}" --build-arg REGISTRY="${REGISTRY}" -f $dockerfile_name .
     fi
     popd
   done
@@ -256,8 +256,7 @@ if [[ "${WHAT}" == "all-conformance" ]]; then
   # no point in rebuilding all of them every time. This will only build the Conformance-related images.
   # Discussed during Conformance Office Hours Meeting (2019.12.17):
   # https://docs.google.com/document/d/1W31nXh9RYAb_VaYkwuPLd1hFxuRX3iU0DmaQ4lkCsX8/edit#heading=h.l87lu17xm9bh
-  # echoserver image not included: https://github.com/kubernetes/kubernetes/issues/84158
-  conformance_images=("busybox" "agnhost" "jessie-dnsutils" "kitten" "nautilus" "nonewprivs" "resource-consumer" "sample-apiserver")
+  conformance_images=("windows-image-builder-helper" "busybox" "agnhost" "echoserver" "jessie-dnsutils" "kitten" "nautilus" "nonewprivs" "resource-consumer" "sample-apiserver")
   for image in "${conformance_images[@]}"; do
     eval "${TASK}" "${image}"
   done

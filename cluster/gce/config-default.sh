@@ -40,6 +40,7 @@ NODE_DISK_SIZE=${NODE_DISK_SIZE:-100GB}
 NODE_LOCAL_SSDS=${NODE_LOCAL_SSDS:-0}
 NODE_LABELS="${KUBE_NODE_LABELS:-}"
 WINDOWS_NODE_LABELS="${WINDOWS_NODE_LABELS:-}"
+NODE_LOCAL_SSDS_EPHEMERAL=${NODE_LOCAL_SSDS_EPHEMERAL:-}
 
 # KUBE_CREATE_NODES can be used to avoid creating nodes, while master will be sized for NUM_NODES nodes.
 # Firewalls and node templates are still created.
@@ -83,7 +84,7 @@ fi
 # you are updating the os image versions, update this variable.
 # Also please update corresponding image for node e2e at:
 # https://github.com/kubernetes/kubernetes/blob/master/test/e2e_node/jenkins/image-config.yaml
-GCI_VERSION=${KUBE_GCI_VERSION:-cos-rc-85-13310-1040-0}
+GCI_VERSION=${KUBE_GCI_VERSION:-cos-85-13310-1041-9}
 export MASTER_IMAGE=${KUBE_GCE_MASTER_IMAGE:-}
 export MASTER_IMAGE_PROJECT=${KUBE_GCE_MASTER_PROJECT:-cos-cloud}
 export NODE_IMAGE=${KUBE_GCE_NODE_IMAGE:-${GCI_VERSION}}
@@ -425,12 +426,19 @@ METADATA_CLOBBERS_CONFIG="${METADATA_CLOBBERS_CONFIG:-false}"
 
 ENABLE_BIG_CLUSTER_SUBNETS="${ENABLE_BIG_CLUSTER_SUBNETS:-false}"
 
+# Optional: Enable log rotation for k8s services
+ENABLE_LOGROTATE_FILES="${ENABLE_LOGROTATE_FILES:-false}"
+PROVIDER_VARS="${PROVIDER_VARS:-} ENABLE_LOGROTATE_FILES"
 if [[ -n "${LOGROTATE_FILES_MAX_COUNT:-}" ]]; then
   PROVIDER_VARS="${PROVIDER_VARS:-} LOGROTATE_FILES_MAX_COUNT"
 fi
 if [[ -n "${LOGROTATE_MAX_SIZE:-}" ]]; then
   PROVIDER_VARS="${PROVIDER_VARS:-} LOGROTATE_MAX_SIZE"
 fi
+
+# Optional: Enable log rotation for pod logs
+ENABLE_POD_LOG="${ENABLE_POD_LOG:-false}"
+PROVIDER_VARS="${PROVIDER_VARS:-} ENABLE_POD_LOG"
 
 if [[ -n "${POD_LOG_MAX_FILE:-}" ]]; then
   PROVIDER_VARS="${PROVIDER_VARS:-} POD_LOG_MAX_FILE"
@@ -474,6 +482,13 @@ ENABLE_PROMETHEUS_TO_SD="${ENABLE_PROMETHEUS_TO_SD:-false}"
 # TODO(#51292): Make kube-proxy Daemonset default and remove the configuration here.
 # Optional: [Experiment Only] Run kube-proxy as a DaemonSet if set to true, run as static pods otherwise.
 KUBE_PROXY_DAEMONSET="${KUBE_PROXY_DAEMONSET:-false}" # true, false
+
+# Control whether the startup scripts manage the lifecycle of kube-proxy
+# When true, the startup scripts do not enable kube-proxy either as a daemonset addon or as a static pod
+# regardless of the value of KUBE_PROXY_DAEMONSET.
+# When false, the value of KUBE_PROXY_DAEMONSET controls whether kube-proxy comes up as a static pod or
+# as an addon daemonset.
+KUBE_PROXY_DISABLE="${KUBE_PROXY_DISABLE:-false}" # true, false
 
 # Optional: duration of cluster signed certificates.
 CLUSTER_SIGNING_DURATION="${CLUSTER_SIGNING_DURATION:-}"

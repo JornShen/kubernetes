@@ -272,6 +272,7 @@ func TestGenericSchedulerWithExtenders(t *testing.T) {
 			fwk, err := st.NewFramework(
 				test.registerPlugins,
 				runtime.WithClientSet(client),
+				runtime.WithInformerFactory(informerFactory),
 				runtime.WithPodNominator(internalqueue.NewPodNominator()),
 			)
 			if err != nil {
@@ -285,8 +286,6 @@ func TestGenericSchedulerWithExtenders(t *testing.T) {
 				cache,
 				emptySnapshot,
 				extenders,
-				informerFactory.Core().V1().PersistentVolumeClaims().Lister(),
-				false,
 				schedulerapi.DefaultPercentageOfNodesToScore)
 			podIgnored := &v1.Pod{}
 			result, err := scheduler.Schedule(context.Background(), prof, framework.NewCycleState(), podIgnored)

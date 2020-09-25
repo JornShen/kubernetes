@@ -27,10 +27,10 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
+	coreinformers "k8s.io/client-go/informers/core/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
@@ -84,11 +84,6 @@ type Scheduler struct {
 	Profiles profile.Map
 
 	client clientset.Interface
-}
-
-// Cache returns the cache in scheduler for test to check the data in scheduler.
-func (sched *Scheduler) Cache() internalcache.Cache {
-	return sched.SchedulerCache
 }
 
 type schedulerOptions struct {
@@ -417,8 +412,7 @@ func (sched *Scheduler) finishBinding(prof *profile.Profile, assumed *v1.Pod, ta
 		return
 	}
 
-	metrics.BindingLatency.Observe(metrics.SinceInSeconds(start))
-	metrics.DeprecatedSchedulingDuration.WithLabelValues(metrics.Binding).Observe(metrics.SinceInSeconds(start))
+	metrics.DeprecatedBindingLatency.Observe(metrics.SinceInSeconds(start))
 	prof.Recorder.Eventf(assumed, nil, v1.EventTypeNormal, "Scheduled", "Binding", "Successfully assigned %v/%v to %v", assumed.Namespace, assumed.Name, targetNode)
 }
 
@@ -508,7 +502,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 		metrics.PodScheduleError(prof.Name, metrics.SinceInSeconds(start))
 		// trigger un-reserve to clean up state associated with the reserved Pod
 		prof.RunReservePluginsUnreserve(schedulingCycleCtx, state, assumedPod, scheduleResult.SuggestedHost)
-		if forgetErr := sched.Cache().ForgetPod(assumedPod); forgetErr != nil {
+		if forgetErr := sched.SchedulerCache.ForgetPod(assumedPod); forgetErr != nil {
 			klog.Errorf("scheduler cache ForgetPod failed: %v", forgetErr)
 		}
 		sched.recordSchedulingFailure(prof, assumedPodInfo, sts.AsError(), SchedulerError, "")
@@ -528,7 +522,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 		}
 		// One of the plugins returned status different than success or wait.
 		prof.RunReservePluginsUnreserve(schedulingCycleCtx, state, assumedPod, scheduleResult.SuggestedHost)
-		if forgetErr := sched.Cache().ForgetPod(assumedPod); forgetErr != nil {
+		if forgetErr := sched.SchedulerCache.ForgetPod(assumedPod); forgetErr != nil {
 			klog.Errorf("scheduler cache ForgetPod failed: %v", forgetErr)
 		}
 		sched.recordSchedulingFailure(prof, assumedPodInfo, runPermitStatus.AsError(), reason, "")
@@ -554,7 +548,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 			}
 			// trigger un-reserve plugins to clean up state associated with the reserved Pod
 			prof.RunReservePluginsUnreserve(bindingCycleCtx, state, assumedPod, scheduleResult.SuggestedHost)
-			if forgetErr := sched.Cache().ForgetPod(assumedPod); forgetErr != nil {
+			if forgetErr := sched.SchedulerCache.ForgetPod(assumedPod); forgetErr != nil {
 				klog.Errorf("scheduler cache ForgetPod failed: %v", forgetErr)
 			}
 			sched.recordSchedulingFailure(prof, assumedPodInfo, waitOnPermitStatus.AsError(), reason, "")
@@ -567,7 +561,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 			metrics.PodScheduleError(prof.Name, metrics.SinceInSeconds(start))
 			// trigger un-reserve plugins to clean up state associated with the reserved Pod
 			prof.RunReservePluginsUnreserve(bindingCycleCtx, state, assumedPod, scheduleResult.SuggestedHost)
-			if forgetErr := sched.Cache().ForgetPod(assumedPod); forgetErr != nil {
+			if forgetErr := sched.SchedulerCache.ForgetPod(assumedPod); forgetErr != nil {
 				klog.Errorf("scheduler cache ForgetPod failed: %v", forgetErr)
 			}
 			sched.recordSchedulingFailure(prof, assumedPodInfo, preBindStatus.AsError(), SchedulerError, "")
@@ -649,9 +643,9 @@ func NewInformerFactory(cs clientset.Interface, resyncPeriod time.Duration) info
 
 // newPodInformer creates a shared index informer that returns only non-terminal pods.
 func newPodInformer(cs clientset.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	selector := fields.ParseSelectorOrDie(
-		"status.phase!=" + string(v1.PodSucceeded) +
-			",status.phase!=" + string(v1.PodFailed))
-	lw := cache.NewListWatchFromClient(cs.CoreV1().RESTClient(), string(v1.ResourcePods), metav1.NamespaceAll, selector)
-	return cache.NewSharedIndexInformer(lw, &v1.Pod{}, resyncPeriod, nil)
+	selector := fmt.Sprintf("status.phase!=%v,status.phase!=%v", v1.PodSucceeded, v1.PodFailed)
+	tweakListOptions := func(options *metav1.ListOptions) {
+		options.FieldSelector = selector
+	}
+	return coreinformers.NewFilteredPodInformer(cs, metav1.NamespaceAll, resyncPeriod, nil, tweakListOptions)
 }

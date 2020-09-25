@@ -403,28 +403,26 @@ function DownloadAndInstall-KubernetesBinaries {
 # Required ${kube_env} keys:
 #   CSI_PROXY_STORAGE_PATH and CSI_PROXY_VERSION
 function DownloadAndInstall-CSIProxyBinaries {
-  if (Test-IsTestCluster $kube_env) {
-    if (ShouldWrite-File ${env:NODE_DIR}\csi-proxy.exe) {
-      $tmp_dir = 'C:\k8s_tmp'
-      New-Item -Force -ItemType 'directory' $tmp_dir | Out-Null
-      $filename = 'csi-proxy.exe'
-      $urls = "${env:CSI_PROXY_STORAGE_PATH}/${env:CSI_PROXY_VERSION}/$filename"
-      MustDownload-File -OutFile $tmp_dir\$filename -URLs $urls
-      Move-Item -Force $tmp_dir\$filename ${env:NODE_DIR}\$filename
-      # Clean up the temporary directory
-      Remove-Item -Force -Recurse $tmp_dir
-    }
+  if (ShouldWrite-File ${env:NODE_DIR}\csi-proxy.exe) {
+    $tmp_dir = 'C:\k8s_tmp'
+    New-Item -Force -ItemType 'directory' $tmp_dir | Out-Null
+    $filename = 'csi-proxy.exe'
+    $urls = "${env:CSI_PROXY_STORAGE_PATH}/${env:CSI_PROXY_VERSION}/$filename"
+    MustDownload-File -OutFile $tmp_dir\$filename -URLs $urls
+    Move-Item -Force $tmp_dir\$filename ${env:NODE_DIR}\$filename
+    # Clean up the temporary directory
+    Remove-Item -Force -Recurse $tmp_dir
   }
 }
 
 function Start-CSIProxy {
-  if (Test-IsTestCluster $kube_env) {
-    Log-Output "Creating CSI Proxy Service"
-    & sc.exe create csiproxy binPath= "${env:NODE_DIR}\csi-proxy.exe --windows-service"
-    & sc.exe failure csiproxy reset= 0 actions= restart/10000
-    Log-Output "Starting CSI Proxy Service"
-    & sc.exe start csiproxy
-  }
+  Log-Output "Creating CSI Proxy Service"
+  $flags = "-windows-service -log_file=${env:LOGS_DIR}\csi-proxy.log -logtostderr=false"
+  & sc.exe create csiproxy binPath= "${env:NODE_DIR}\csi-proxy.exe $flags"
+  & sc.exe failure csiproxy reset= 0 actions= restart/10000
+  Log-Output "Starting CSI Proxy Service"
+  & sc.exe start csiproxy
+
 }
 
 # TODO(pjh): this is copied from
@@ -930,17 +928,9 @@ function Configure-GcePdTools {
   }
 
   Add-Content $PsHome\profile.ps1 `
-'$modulePath = "K8S_DIR\GetGcePdName.dll"
-Unblock-File $modulePath
-Import-Module -Name $modulePath'.replace('K8S_DIR', ${env:K8S_DIR})
-  if (Test-IsTestCluster $kube_env) {
-    if (ShouldWrite-File ${env:K8S_DIR}\diskutil.exe) {
-      # The source code of this executable file is https://github.com/kubernetes-sigs/sig-windows-tools/blob/master/cmd/diskutil/diskutil.c
-      MustDownload-File -OutFile ${env:K8S_DIR}\diskutil.exe `
-        -URLs "https://ddebroywin1.s3-us-west-2.amazonaws.com/diskutil.exe"
-    }
-    Copy-Item ${env:K8S_DIR}\diskutil.exe -Destination "C:\Windows\system32"
-  }
+  '$modulePath = "K8S_DIR\GetGcePdName.dll"
+  Unblock-File $modulePath
+  Import-Module -Name $modulePath'.replace('K8S_DIR', ${env:K8S_DIR})
 }
 
 # Setup cni network. This function supports both Docker and containerd.
@@ -1145,9 +1135,20 @@ function Start-WorkerServices {
   $kubelet_args_str = ${kube_env}['KUBELET_ARGS']
   $kubelet_args = $kubelet_args_str.Split(" ")
   Log-Output "kubelet_args from metadata: ${kubelet_args}"
+
+  # To join GCE instances to AD, we need to shorten their names, as NetBIOS name
+  # must be <= 15 characters, and GKE generated names are longer than that.
+  # To perform the join in an automated way, it's preferable to apply the rename
+  # and domain join in the GCESysprep step. However, after sysprep is complete
+  # and the machine restarts, kubelet bootstrapping should not use the shortened
+  # computer name, and instead use the instance's name by using --hostname-override,
+  # otherwise kubelet and kube-proxy will not be able to run properly.
+  $instance_name = "$(Get-InstanceMetadata 'name' | Out-String)"
   $default_kubelet_args = @(`
-      "--pod-infra-container-image=${env:INFRA_CONTAINER}"
+      "--pod-infra-container-image=${env:INFRA_CONTAINER}",
+      "--hostname-override=${instance_name}"
   )
+
   $kubelet_args = ${default_kubelet_args} + ${kubelet_args}
   if (-not (Test-NodeUsesAuthPlugin ${kube_env})) {
     Log-Output 'Using bootstrap kubeconfig for authentication'
@@ -1172,8 +1173,10 @@ function Start-WorkerServices {
   # And also with various volumeMounts and "securityContext: privileged: true".
   $default_kubeproxy_args = @(`
       "--kubeconfig=${env:KUBEPROXY_KUBECONFIG}",
-      "--cluster-cidr=$(${kube_env}['CLUSTER_IP_RANGE'])"
+      "--cluster-cidr=$(${kube_env}['CLUSTER_IP_RANGE'])",
+      "--hostname-override=${instance_name}"
   )
+  
   $kubeproxy_args = ${default_kubeproxy_args} + ${kubeproxy_args}
   Log-Output "Final kubeproxy_args: ${kubeproxy_args}"
 

@@ -68,9 +68,6 @@ type Configurator struct {
 
 	schedulerCache internalcache.Cache
 
-	// Disable pod preemption or not.
-	disablePreemption bool
-
 	// Always check all predicates even if the middle of one predicate fails.
 	alwaysCheckAllPredicates bool
 
@@ -183,8 +180,6 @@ func (c *Configurator) create() (*Scheduler, error) {
 		c.schedulerCache,
 		c.nodeInfoSnapshot,
 		extenders,
-		c.informerFactory.Core().V1().PersistentVolumeClaims().Lister(),
-		c.disablePreemption,
 		c.percentageOfNodesToScore,
 	)
 

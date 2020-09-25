@@ -1010,10 +1010,10 @@ github.com/spf13/pflag
 ## explicit
 github.com/spf13/viper
 # github.com/spf13/viper => github.com/spf13/viper v1.4.0
-# github.com/storageos/go-api v0.0.0-20180912212459-343b3eff91fc => github.com/storageos/go-api v0.0.0-20180912212459-343b3eff91fc
+# github.com/storageos/go-api v2.2.0+incompatible => github.com/storageos/go-api v2.2.0+incompatible
 ## explicit
 github.com/storageos/go-api
-# github.com/storageos/go-api => github.com/storageos/go-api v0.0.0-20180912212459-343b3eff91fc
+# github.com/storageos/go-api => github.com/storageos/go-api v2.2.0+incompatible
 github.com/storageos/go-api/netutil
 github.com/storageos/go-api/serror
 github.com/storageos/go-api/types
@@ -1096,9 +1096,9 @@ github.com/xiang90/probing
 # go.etcd.io/bbolt v1.3.5 => go.etcd.io/bbolt v1.3.5
 go.etcd.io/bbolt
 # go.etcd.io/bbolt => go.etcd.io/bbolt v1.3.5
-# go.etcd.io/etcd v0.5.0-alpha.5.0.20200824191128-ae9734ed278b => go.etcd.io/etcd v0.5.0-alpha.5.0.20200824191128-ae9734ed278b
+# go.etcd.io/etcd v0.5.0-alpha.5.0.20200910180754-dd1b699fc489 => go.etcd.io/etcd v0.5.0-alpha.5.0.20200910180754-dd1b699fc489
 ## explicit
-# go.etcd.io/etcd => go.etcd.io/etcd v0.5.0-alpha.5.0.20200824191128-ae9734ed278b
+# go.etcd.io/etcd => go.etcd.io/etcd v0.5.0-alpha.5.0.20200910180754-dd1b699fc489
 go.etcd.io/etcd/auth
 go.etcd.io/etcd/auth/authpb
 go.etcd.io/etcd/client
@@ -1587,7 +1587,6 @@ k8s.io/api/rbac/v1beta1
 k8s.io/api/scheduling/v1
 k8s.io/api/scheduling/v1alpha1
 k8s.io/api/scheduling/v1beta1
-k8s.io/api/settings/v1alpha1
 k8s.io/api/storage/v1
 k8s.io/api/storage/v1alpha1
 k8s.io/api/storage/v1beta1
@@ -1716,6 +1715,13 @@ k8s.io/apiserver/pkg/admission/configuration
 k8s.io/apiserver/pkg/admission/initializer
 k8s.io/apiserver/pkg/admission/metrics
 k8s.io/apiserver/pkg/admission/plugin/namespace/lifecycle
+k8s.io/apiserver/pkg/admission/plugin/resourcequota
+k8s.io/apiserver/pkg/admission/plugin/resourcequota/apis/resourcequota
+k8s.io/apiserver/pkg/admission/plugin/resourcequota/apis/resourcequota/install
+k8s.io/apiserver/pkg/admission/plugin/resourcequota/apis/resourcequota/v1
+k8s.io/apiserver/pkg/admission/plugin/resourcequota/apis/resourcequota/v1alpha1
+k8s.io/apiserver/pkg/admission/plugin/resourcequota/apis/resourcequota/v1beta1
+k8s.io/apiserver/pkg/admission/plugin/resourcequota/apis/resourcequota/validation
 k8s.io/apiserver/pkg/admission/plugin/webhook
 k8s.io/apiserver/pkg/admission/plugin/webhook/config
 k8s.io/apiserver/pkg/admission/plugin/webhook/config/apis/webhookadmission
@@ -1781,6 +1787,8 @@ k8s.io/apiserver/pkg/endpoints/openapi
 k8s.io/apiserver/pkg/endpoints/request
 k8s.io/apiserver/pkg/endpoints/warning
 k8s.io/apiserver/pkg/features
+k8s.io/apiserver/pkg/quota/v1
+k8s.io/apiserver/pkg/quota/v1/generic
 k8s.io/apiserver/pkg/registry/generic
 k8s.io/apiserver/pkg/registry/generic/registry
 k8s.io/apiserver/pkg/registry/generic/rest
@@ -1924,8 +1932,6 @@ k8s.io/client-go/informers/scheduling
 k8s.io/client-go/informers/scheduling/v1
 k8s.io/client-go/informers/scheduling/v1alpha1
 k8s.io/client-go/informers/scheduling/v1beta1
-k8s.io/client-go/informers/settings
-k8s.io/client-go/informers/settings/v1alpha1
 k8s.io/client-go/informers/storage
 k8s.io/client-go/informers/storage/v1
 k8s.io/client-go/informers/storage/v1alpha1
@@ -2009,8 +2015,6 @@ k8s.io/client-go/kubernetes/typed/scheduling/v1alpha1
 k8s.io/client-go/kubernetes/typed/scheduling/v1alpha1/fake
 k8s.io/client-go/kubernetes/typed/scheduling/v1beta1
 k8s.io/client-go/kubernetes/typed/scheduling/v1beta1/fake
-k8s.io/client-go/kubernetes/typed/settings/v1alpha1
-k8s.io/client-go/kubernetes/typed/settings/v1alpha1/fake
 k8s.io/client-go/kubernetes/typed/storage/v1
 k8s.io/client-go/kubernetes/typed/storage/v1/fake
 k8s.io/client-go/kubernetes/typed/storage/v1alpha1
@@ -2051,7 +2055,6 @@ k8s.io/client-go/listers/rbac/v1beta1
 k8s.io/client-go/listers/scheduling/v1
 k8s.io/client-go/listers/scheduling/v1alpha1
 k8s.io/client-go/listers/scheduling/v1beta1
-k8s.io/client-go/listers/settings/v1alpha1
 k8s.io/client-go/listers/storage/v1
 k8s.io/client-go/listers/storage/v1alpha1
 k8s.io/client-go/listers/storage/v1beta1
@@ -2357,6 +2360,8 @@ k8s.io/kubectl/pkg/validation
 k8s.io/kubelet/config/v1beta1
 k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1
 k8s.io/kubelet/pkg/apis/pluginregistration/v1
+k8s.io/kubelet/pkg/apis/podresources/v1alpha1
+k8s.io/kubelet/pkg/apis/stats/v1alpha1
 # k8s.io/legacy-cloud-providers v0.0.0 => ./staging/src/k8s.io/legacy-cloud-providers
 ## explicit
 # k8s.io/legacy-cloud-providers => ./staging/src/k8s.io/legacy-cloud-providers
@@ -2425,6 +2430,9 @@ k8s.io/metrics/pkg/client/custom_metrics/fake
 k8s.io/metrics/pkg/client/custom_metrics/scheme
 k8s.io/metrics/pkg/client/external_metrics
 k8s.io/metrics/pkg/client/external_metrics/fake
+# k8s.io/mount-utils v0.0.0 => ./staging/src/k8s.io/mount-utils
+## explicit
+k8s.io/mount-utils
 # k8s.io/mount-utils => ./staging/src/k8s.io/mount-utils
 # k8s.io/sample-apiserver v0.0.0 => ./staging/src/k8s.io/sample-apiserver
 ## explicit
@@ -2455,9 +2463,9 @@ k8s.io/sample-apiserver/pkg/registry/wardle/fischer
 k8s.io/sample-apiserver/pkg/registry/wardle/flunder
 # k8s.io/sample-cli-plugin => ./staging/src/k8s.io/sample-cli-plugin
 # k8s.io/sample-controller => ./staging/src/k8s.io/sample-controller
-# k8s.io/system-validators v1.1.2 => k8s.io/system-validators v1.1.2
+# k8s.io/system-validators v1.2.0 => k8s.io/system-validators v1.2.0
 ## explicit
-# k8s.io/system-validators => k8s.io/system-validators v1.1.2
+# k8s.io/system-validators => k8s.io/system-validators v1.2.0
 k8s.io/system-validators/validators
 # k8s.io/utils v0.0.0-20200729134348-d5654de09c73 => k8s.io/utils v0.0.0-20200729134348-d5654de09c73
 ## explicit
@@ -2489,7 +2497,6 @@ k8s.io/utils/trace
 sigs.k8s.io/apiserver-network-proxy/konnectivity-client/pkg/client
 sigs.k8s.io/apiserver-network-proxy/konnectivity-client/proto/client
 # sigs.k8s.io/kustomize v2.0.3+incompatible => sigs.k8s.io/kustomize v2.0.3+incompatible
-## explicit
 # sigs.k8s.io/kustomize => sigs.k8s.io/kustomize v2.0.3+incompatible
 sigs.k8s.io/kustomize/pkg/commands/build
 sigs.k8s.io/kustomize/pkg/constants

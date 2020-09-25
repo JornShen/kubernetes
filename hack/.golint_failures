@@ -165,7 +165,6 @@ pkg/registry/rbac/rolebinding/policybased
 pkg/registry/rbac/validation
 pkg/registry/registrytest
 pkg/registry/scheduling/rest
-pkg/registry/settings/rest
 pkg/registry/storage/rest
 pkg/registry/storage/storageclass
 pkg/scheduler/apis/config/v1
@@ -196,9 +195,6 @@ pkg/volume/util/volumepathhandler
 pkg/volume/vsphere_volume
 plugin/pkg/admission/eventratelimit/apis/eventratelimit/v1alpha1
 plugin/pkg/admission/limitranger
-plugin/pkg/admission/resourcequota/apis/resourcequota/v1
-plugin/pkg/admission/resourcequota/apis/resourcequota/v1alpha1
-plugin/pkg/admission/resourcequota/apis/resourcequota/v1beta1
 plugin/pkg/auth/authorizer/node
 plugin/pkg/auth/authorizer/rbac
 staging/src/k8s.io/api/admission/v1
@@ -234,7 +230,6 @@ staging/src/k8s.io/api/rbac/v1alpha1
 staging/src/k8s.io/api/rbac/v1beta1
 staging/src/k8s.io/api/scheduling/v1alpha1
 staging/src/k8s.io/api/scheduling/v1beta1
-staging/src/k8s.io/api/settings/v1alpha1
 staging/src/k8s.io/api/storage/v1
 staging/src/k8s.io/api/storage/v1alpha1
 staging/src/k8s.io/api/storage/v1beta1
@@ -262,7 +257,6 @@ staging/src/k8s.io/apimachinery/pkg/apis/meta/v1beta1
 staging/src/k8s.io/apimachinery/pkg/apis/testapigroup
 staging/src/k8s.io/apimachinery/pkg/apis/testapigroup/v1
 staging/src/k8s.io/apimachinery/pkg/conversion
-staging/src/k8s.io/apimachinery/pkg/labels
 staging/src/k8s.io/apimachinery/pkg/runtime
 staging/src/k8s.io/apimachinery/pkg/runtime/schema
 staging/src/k8s.io/apimachinery/pkg/runtime/serializer
@@ -295,6 +289,9 @@ staging/src/k8s.io/apimachinery/pkg/watch
 staging/src/k8s.io/apiserver/pkg/admission
 staging/src/k8s.io/apiserver/pkg/admission/configuration
 staging/src/k8s.io/apiserver/pkg/admission/initializer
+staging/src/k8s.io/apiserver/pkg/admission/plugin/resourcequota/apis/resourcequota/v1
+staging/src/k8s.io/apiserver/pkg/admission/plugin/resourcequota/apis/resourcequota/v1alpha1
+staging/src/k8s.io/apiserver/pkg/admission/plugin/resourcequota/apis/resourcequota/v1beta1
 staging/src/k8s.io/apiserver/pkg/admission/plugin/webhook
 staging/src/k8s.io/apiserver/pkg/admission/plugin/webhook/config/apis/webhookadmission
 staging/src/k8s.io/apiserver/pkg/admission/plugin/webhook/config/apis/webhookadmission/v1

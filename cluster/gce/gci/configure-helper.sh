@@ -385,6 +385,10 @@ function mount-ext(){
 # Local ssds, if present, are mounted or symlinked to their appropriate
 # locations
 function ensure-local-ssds() {
+  if [ "${NODE_LOCAL_SSDS_EPHEMERAL:-false}" == "true" ]; then
+    ensure-local-ssds-ephemeral-storage
+    return
+  fi
   get-local-disk-num "scsi" "block"
   local scsiblocknum="${localdisknum}"
   local i=0
@@ -436,20 +440,78 @@ function ensure-local-ssds() {
   done
 }
 
+# Local SSDs, if present, are used in a single RAID 0 array and directories that
+# back ephemeral storage are mounted on them (kubelet root, container runtime
+# root and pod logs).
+function ensure-local-ssds-ephemeral-storage() {
+  local devices=()
+  # Get nvme devices
+  for ssd in /dev/nvme*n*; do
+    if [ -e "${ssd}" ]; then
+      # This workaround to find if the NVMe device is a local SSD is required
+      # because the existing Google images does not them in /dev/disk/by-id
+      if [[ "$(lsblk -o MODEL -dn "${ssd}")" == "nvme_card" ]]; then
+        devices+=("${ssd}")
+      fi
+    fi
+  done
+  if [ "${#devices[@]}" -eq 0 ]; then
+    echo "No local NVMe SSD disks found."
+    return
+  fi
+
+  local device="${devices[0]}"
+  if [ "${#devices[@]}" -ne 1 ]; then
+    seen_arrays=(/dev/md/*)
+    device=${seen_arrays[0]}
+    echo "Setting RAID array with local SSDs on device ${device}"
+    if [ ! -e "$device" ]; then
+      device="/dev/md/0"
+      echo "y" | mdadm --create "${device}" --level=0 --raid-devices=${#devices[@]} "${devices[@]}"
+    fi
+  fi
+
+  local ephemeral_mountpoint="/mnt/stateful_partition/kube-ephemeral-ssd"
+  safe-format-and-mount "${device}" "${ephemeral_mountpoint}"
+
+  # mount container runtime root dir on SSD
+  local container_runtime="${CONTAINER_RUNTIME:-docker}"
+  systemctl stop "$container_runtime"
+  # Some images remount the container runtime root dir.
+  umount "/var/lib/${container_runtime}" || true
+  # Move the container runtime's directory to the new location to preserve
+  # preloaded images.
+  if [ ! -d "${ephemeral_mountpoint}/${container_runtime}" ]; then
+    mv "/var/lib/${container_runtime}" "${ephemeral_mountpoint}/${container_runtime}"
+  fi
+  safe-bind-mount "${ephemeral_mountpoint}/${container_runtime}" "/var/lib/${container_runtime}"
+  systemctl start "$container_runtime"
+
+  # mount kubelet root dir on SSD
+  mkdir -p "${ephemeral_mountpoint}/kubelet"
+  safe-bind-mount "${ephemeral_mountpoint}/kubelet" "/var/lib/kubelet"
+
+  # mount pod logs root dir on SSD
+  mkdir -p "${ephemeral_mountpoint}/log_pods"
+  safe-bind-mount "${ephemeral_mountpoint}/log_pods" "/var/log/pods"
+}
+
 # Installs logrotate configuration files
 function setup-logrotate() {
   mkdir -p /etc/logrotate.d/
-  # Configure log rotation for all logs in /var/log, which is where k8s services
-  # are configured to write their log files. Whenever logrotate is ran, this
-  # config will:
-  # * rotate the log file if its size is > 100Mb OR if one day has elapsed
-  # * save rotated logs into a gzipped timestamped backup
-  # * log file timestamp (controlled by 'dateformat') includes seconds too. This
-  #   ensures that logrotate can generate unique logfiles during each rotation
-  #   (otherwise it skips rotation if 'maxsize' is reached multiple times in a
-  #   day).
-  # * keep only 5 old (rotated) logs, and will discard older logs.
-  cat > /etc/logrotate.d/allvarlogs <<EOF
+
+  if [[ "${ENABLE_LOGROTATE_FILES:-false}" = "true" ]]; then
+    # Configure log rotation for all logs in /var/log, which is where k8s services
+    # are configured to write their log files. Whenever logrotate is ran, this
+    # config will:
+    # * rotate the log file if its size is > 100Mb OR if one day has elapsed
+    # * save rotated logs into a gzipped timestamped backup
+    # * log file timestamp (controlled by 'dateformat') includes seconds too. This
+    #   ensures that logrotate can generate unique logfiles during each rotation
+    #   (otherwise it skips rotation if 'maxsize' is reached multiple times in a
+    #   day).
+    # * keep only 5 old (rotated) logs, and will discard older logs.
+    cat > /etc/logrotate.d/allvarlogs <<EOF
 /var/log/*.log {
     rotate ${LOGROTATE_FILES_MAX_COUNT:-5}
     copytruncate
@@ -463,9 +525,11 @@ function setup-logrotate() {
     create 0644 root root
 }
 EOF
+  fi
 
-  # Configure log rotation for pod logs in /var/log/pods/NAMESPACE_NAME_UID.
-  cat > /etc/logrotate.d/allpodlogs <<EOF
+  if [[ "${ENABLE_POD_LOG:-false}" = "true" ]]; then
+    # Configure log rotation for pod logs in /var/log/pods/NAMESPACE_NAME_UID.
+    cat > /etc/logrotate.d/allpodlogs <<EOF
 /var/log/pods/*/*.log {
     rotate ${POD_LOG_MAX_FILE:-5}
     copytruncate
@@ -479,6 +543,7 @@ EOF
     create 0644 root root
 }
 EOF
+  fi
 }
 
 # Finds the master PD device; returns it in MASTER_PD_DEVICE
@@ -1035,7 +1100,6 @@ function create-master-audit-policy {
       - group: "policy"
       - group: "rbac.authorization.k8s.io"
       - group: "scheduling.k8s.io"
-      - group: "settings.k8s.io"
       - group: "storage.k8s.io"'
 
   cat <<EOF >"${path}"
@@ -2455,7 +2519,7 @@ function start-kube-addons {
   fi
 
   # Set up manifests of other addons.
-  if [[ "${KUBE_PROXY_DAEMONSET:-}" == "true" ]]; then
+  if [[ "${KUBE_PROXY_DAEMONSET:-}" == "true" ]] && [[ "${KUBE_PROXY_DISABLE:-}" != "true" ]]; then
     if [ -n "${CUSTOM_KUBE_PROXY_YAML:-}" ]; then
       # Replace with custom GKE kube proxy.
       cat > "$src_dir/kube-proxy/kube-proxy-ds.yaml" <<EOF
@@ -2946,8 +3010,8 @@ function main() {
   setup-os-params
   config-ip-firewall
   create-dirs
-  setup-kubelet-dir
   ensure-local-ssds
+  setup-kubelet-dir
   setup-logrotate
   if [[ "${KUBERNETES_MASTER:-}" == "true" ]]; then
     mount-master-pd
@@ -2963,7 +3027,7 @@ function main() {
   else
     create-node-pki
     create-kubelet-kubeconfig "${KUBERNETES_MASTER_NAME}"
-    if [[ "${KUBE_PROXY_DAEMONSET:-}" != "true" ]]; then
+    if [[ "${KUBE_PROXY_DAEMONSET:-}" != "true" ]] && [[ "${KUBE_PROXY_DISABLE:-}" != "true" ]]; then
       create-kubeproxy-user-kubeconfig
     fi
     if [[ "${ENABLE_NODE_PROBLEM_DETECTOR:-}" == "standalone" ]]; then
@@ -3008,7 +3072,7 @@ function main() {
     start-lb-controller
     update-legacy-addon-node-labels &
   else
-    if [[ "${KUBE_PROXY_DAEMONSET:-}" != "true" ]]; then
+    if [[ "${KUBE_PROXY_DAEMONSET:-}" != "true" ]] && [[ "${KUBE_PROXY_DISABLE:-}" != "true" ]]; then
       start-kube-proxy
     fi
     if [[ "${ENABLE_NODE_PROBLEM_DETECTOR:-}" == "standalone" ]]; then
