@@ -456,7 +456,7 @@ func NewExecPodSpec(ns, name string, hostNetwork bool) *v1.Pod {
 
 // newExecPodSpec returns the pod spec of exec pod
 func newExecPodSpec(ns, generateName string) *v1.Pod {
-	pod := NewAgnhostPod(ns, "agnhost-pod", nil, nil, nil)
+	pod := NewAgnhostPod(ns, "", nil, nil, nil)
 	pod.ObjectMeta.GenerateName = generateName
 	return pod
 }
