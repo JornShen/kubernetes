@@ -313,7 +313,9 @@ func (config *NetworkingTestConfig) GetEndpointsFromContainer(protocol, containe
 			// we confirm unreachability.
 			framework.Logf("Failed to execute %q: %v, stdout: %q, stderr: %q", cmd, err, stdout, stderr)
 		} else {
-			framework.Logf("Tries: %d, in try: %d, stdout: %v, stderr: %v, command run in: %#v", tries, i, stdout, stderr, config.TestContainerPod)
+			podInfo := fmt.Sprintf("name: %v, namespace: %v, hostIp: %v, podIp: %v, conditions: %v", config.TestContainerPod.Name, config.TestContainerPod.Namespace, config.TestContainerPod.Status.HostIP, config.TestContainerPod.Status.PodIP, config.TestContainerPod.Status.Conditions)
+			framework.Logf("Tries: %d, in try: %d, stdout: %v, stderr: %v, command run in Pod { %#v }", tries, i, stdout, stderr, podInfo)
+
 			var output NetexecDialResponse
 			if err := json.Unmarshal([]byte(stdout), &output); err != nil {
 				framework.Logf("WARNING: Failed to unmarshal curl response. Cmd %v run in %v, output: %s, err: %v",
@@ -378,17 +380,20 @@ func (config *NetworkingTestConfig) GetHTTPCodeFromTestContainer(path, targetIP 
 	return code, nil
 }
 
-// DialFromNode executes a tcp or udp request based on protocol via kubectl exec
+// DialFromNode executes a tcp/udp curl/nc request based on protocol via kubectl exec
 // in a test container running with host networking.
-// - minTries is the minimum number of curl attempts required before declaring
-//   success. Set to 0 if you'd like to return as soon as all endpoints respond
-//   at least once.
-// - maxTries is the maximum number of curl attempts. If this many attempts pass
-//   and we don't see all expected endpoints, the test fails.
-// maxTries == minTries will confirm that we see the expected endpoints and no
-// more for maxTries. Use this if you want to eg: fail a readiness check on a
-// pod and confirm it doesn't show up as an endpoint.
-func (config *NetworkingTestConfig) DialFromNode(protocol, targetIP string, targetPort, maxTries, minTries int, expectedEps sets.String) {
+// - minTries is the minimum number of curl/nc attempts required before declaring
+//   success. If 0, then we return as soon as all endpoints succeed.
+// - There is no logical change to test results if faillures happen AFTER endpoints have succeeded,
+//   hence over-padding minTries will NOT reverse a successful result and is thus not very useful yet
+//   (See the TODO about checking probability, which isnt implemented yet).
+// - maxTries is the maximum number of curl/echo attempts before an error is returned.  The
+//   smaller this number is, the less 'slack' there is for declaring success.
+// - if maxTries < expectedEps, this test is guaranteed to return an error, because all endpoints wont be hit.
+// - maxTries == minTries will return as soon as all endpoints succeed (or fail once maxTries is reached without
+//   success on all endpoints).
+//   In general its prudent to have a high enough level of minTries to guarantee that all pods get a fair chance at receiving traffic.
+func (config *NetworkingTestConfig) DialFromNode(protocol, targetIP string, targetPort, maxTries, minTries int, expectedEps sets.String) error {
 	var cmd string
 	if protocol == "udp" {
 		cmd = fmt.Sprintf("echo hostName | nc -w 1 -u %s %d", targetIP, targetPort)
@@ -406,6 +411,7 @@ func (config *NetworkingTestConfig) DialFromNode(protocol, targetIP string, targ
 	eps := sets.NewString()
 
 	filterCmd := fmt.Sprintf("%s | grep -v '^\\s*$'", cmd)
+	framework.Logf("Going to poll %v on port %v at least %v times, with a maximum of %v tries before failing", targetIP, targetPort, minTries, maxTries)
 	for i := 0; i < maxTries; i++ {
 		stdout, stderr, err := config.f.ExecShellInPodWithFullOutput(config.HostTestContainerPod.Name, filterCmd)
 		if err != nil || len(stderr) > 0 {
@@ -422,8 +428,8 @@ func (config *NetworkingTestConfig) DialFromNode(protocol, targetIP string, targ
 
 		// Check against i+1 so we exit if minTries == maxTries.
 		if eps.Equal(expectedEps) && i+1 >= minTries {
-			framework.Logf("Found all expected endpoints: %+v", eps.List())
-			return
+			framework.Logf("Found all %d expected endpoints: %+v", eps.Len(), eps.List())
+			return nil
 		}
 
 		framework.Logf("Waiting for %+v endpoints (expected=%+v, actual=%+v)", expectedEps.Difference(eps).List(), expectedEps.List(), eps.List())
@@ -433,7 +439,7 @@ func (config *NetworkingTestConfig) DialFromNode(protocol, targetIP string, targ
 	}
 
 	config.diagnoseMissingEndpoints(eps)
-	framework.Failf("Failed to find expected endpoints:\nTries %d\nCommand %v\nretrieved %v\nexpected %v\n", maxTries, cmd, eps, expectedEps)
+	return fmt.Errorf("failed to find expected endpoints, \ntries %d\nCommand %v\nretrieved %v\nexpected %v", maxTries, cmd, eps, expectedEps)
 }
 
 // GetSelfURL executes a curl against the given path via kubectl exec into a
@@ -947,16 +953,16 @@ func TestUnderTemporaryNetworkFailure(c clientset.Interface, ns string, node *v1
 	if err != nil {
 		framework.Failf("Error getting node external ip : %v", err)
 	}
-	masterAddresses := framework.GetAllMasterAddresses(c)
-	ginkgo.By(fmt.Sprintf("block network traffic from node %s to the master", node.Name))
+	controlPlaneAddresses := framework.GetControlPlaneAddresses(c)
+	ginkgo.By(fmt.Sprintf("block network traffic from node %s to the control plane", node.Name))
 	defer func() {
 		// This code will execute even if setting the iptables rule failed.
 		// It is on purpose because we may have an error even if the new rule
 		// had been inserted. (yes, we could look at the error code and ssh error
 		// separately, but I prefer to stay on the safe side).
-		ginkgo.By(fmt.Sprintf("Unblock network traffic from node %s to the master", node.Name))
-		for _, masterAddress := range masterAddresses {
-			UnblockNetwork(host, masterAddress)
+		ginkgo.By(fmt.Sprintf("Unblock network traffic from node %s to the control plane", node.Name))
+		for _, instanceAddress := range controlPlaneAddresses {
+			UnblockNetwork(host, instanceAddress)
 		}
 	}()
 
@@ -964,8 +970,8 @@ func TestUnderTemporaryNetworkFailure(c clientset.Interface, ns string, node *v1
 	if !e2enode.WaitConditionToBe(c, node.Name, v1.NodeReady, true, resizeNodeReadyTimeout) {
 		framework.Failf("Node %s did not become ready within %v", node.Name, resizeNodeReadyTimeout)
 	}
-	for _, masterAddress := range masterAddresses {
-		BlockNetwork(host, masterAddress)
+	for _, instanceAddress := range controlPlaneAddresses {
+		BlockNetwork(host, instanceAddress)
 	}
 
 	framework.Logf("Waiting %v for node %s to be not ready after simulated network failure", resizeNodeNotReadyTimeout, node.Name)

@@ -88,11 +88,11 @@ function set-linux-node-image() {
 function set-windows-node-image() {
   WINDOWS_NODE_IMAGE_PROJECT="windows-cloud"
   if [[ "${WINDOWS_NODE_OS_DISTRIBUTION}" == "win2019" ]]; then
-    WINDOWS_NODE_IMAGE="windows-server-2019-dc-core-for-containers-v20200310"
+    WINDOWS_NODE_IMAGE="windows-server-2019-dc-core-for-containers-v20200908"
   elif [[ "${WINDOWS_NODE_OS_DISTRIBUTION}" == "win1909" ]]; then
-    WINDOWS_NODE_IMAGE="windows-server-1909-dc-core-for-containers-v20200310"
+    WINDOWS_NODE_IMAGE="windows-server-1909-dc-core-for-containers-v20200908"
   elif [[ "${WINDOWS_NODE_OS_DISTRIBUTION}" == "win1809" ]]; then
-    WINDOWS_NODE_IMAGE="windows-server-1809-dc-core-for-containers-v20200310"
+    WINDOWS_NODE_IMAGE="windows-server-1809-dc-core-for-containers-v20200908"
   else
     echo "Unknown WINDOWS_NODE_OS_DISTRIBUTION ${WINDOWS_NODE_OS_DISTRIBUTION}" >&2
     exit 1
@@ -239,10 +239,10 @@ function copy-to-staging() {
     fi
   fi
 
-  echo "${hash}" > "${tar}.sha1"
-  gsutil -m -q -h "Cache-Control:private, max-age=0" cp "${tar}" "${tar}.sha1" "${staging_path}"
-  gsutil -m acl ch -g all:R "${gs_url}" "${gs_url}.sha1" >/dev/null 2>&1 || true
-  echo "+++ ${basename_tar} uploaded (sha1 = ${hash})"
+  echo "${hash}" > "${tar}.sha512"
+  gsutil -m -q -h "Cache-Control:private, max-age=0" cp "${tar}" "${tar}.sha512" "${staging_path}"
+  gsutil -m acl ch -g all:R "${gs_url}" "${gs_url}.sha512" >/dev/null 2>&1 || true
+  echo "+++ ${basename_tar} uploaded (sha512 = ${hash})"
 }
 
 
@@ -314,13 +314,13 @@ function upload-tars() {
     DOCKER_REGISTRY_MIRROR_URL="https://mirror.gcr.io"
   fi
 
-  SERVER_BINARY_TAR_HASH=$(sha1sum-file "${SERVER_BINARY_TAR}")
+  SERVER_BINARY_TAR_HASH=$(sha512sum-file "${SERVER_BINARY_TAR}")
 
   if [[ -n "${NODE_BINARY_TAR:-}" ]]; then
-    NODE_BINARY_TAR_HASH=$(sha1sum-file "${NODE_BINARY_TAR}")
+    NODE_BINARY_TAR_HASH=$(sha512sum-file "${NODE_BINARY_TAR}")
   fi
   if [[ -n "${KUBE_MANIFESTS_TAR:-}" ]]; then
-    KUBE_MANIFESTS_TAR_HASH=$(sha1sum-file "${KUBE_MANIFESTS_TAR}")
+    KUBE_MANIFESTS_TAR_HASH=$(sha512sum-file "${KUBE_MANIFESTS_TAR}")
   fi
 
   local server_binary_tar_urls=()
@@ -506,11 +506,11 @@ function load-or-gen-kube-bearertoken() {
 #   SERVER_BINARY_TAR_URL
 #   SERVER_BINARY_TAR_HASH
 function tars_from_version() {
-  local sha1sum=""
-  if which sha1sum >/dev/null 2>&1; then
-    sha1sum="sha1sum"
+  local sha512sum=""
+  if which sha512sum >/dev/null 2>&1; then
+    sha512sum="sha512sum"
   else
-    sha1sum="shasum -a1"
+    sha512sum="shasum -a512"
   fi
 
   if [[ -z "${KUBE_VERSION-}" ]]; then
@@ -520,18 +520,18 @@ function tars_from_version() {
     SERVER_BINARY_TAR_URL="https://storage.googleapis.com/kubernetes-release/release/${KUBE_VERSION}/kubernetes-server-linux-amd64.tar.gz"
     # TODO: Clean this up.
     KUBE_MANIFESTS_TAR_URL="${SERVER_BINARY_TAR_URL/server-linux-amd64/manifests}"
-    KUBE_MANIFESTS_TAR_HASH=$(curl ${KUBE_MANIFESTS_TAR_URL} --silent --show-error | ${sha1sum} | awk '{print $1}')
+    KUBE_MANIFESTS_TAR_HASH=$(curl ${KUBE_MANIFESTS_TAR_URL} --silent --show-error | ${sha512sum} | awk '{print $1}')
   elif [[ ${KUBE_VERSION} =~ ${KUBE_CI_VERSION_REGEX} ]]; then
     SERVER_BINARY_TAR_URL="https://storage.googleapis.com/kubernetes-release-dev/ci/${KUBE_VERSION}/kubernetes-server-linux-amd64.tar.gz"
     # TODO: Clean this up.
     KUBE_MANIFESTS_TAR_URL="${SERVER_BINARY_TAR_URL/server-linux-amd64/manifests}"
-    KUBE_MANIFESTS_TAR_HASH=$(curl ${KUBE_MANIFESTS_TAR_URL} --silent --show-error | ${sha1sum} | awk '{print $1}')
+    KUBE_MANIFESTS_TAR_HASH=$(curl ${KUBE_MANIFESTS_TAR_URL} --silent --show-error | ${sha512sum} | awk '{print $1}')
   else
     echo "Version doesn't match regexp" >&2
     exit 1
   fi
-  if ! SERVER_BINARY_TAR_HASH=$(curl -Ss --fail "${SERVER_BINARY_TAR_URL}.sha1"); then
-    echo "Failure trying to curl release .sha1"
+  if ! SERVER_BINARY_TAR_HASH=$(curl -Ss --fail "${SERVER_BINARY_TAR_URL}.sha512"); then
+    echo "Failure trying to curl release .sha512"
   fi
 
   if ! curl -Ss --head "${SERVER_BINARY_TAR_URL}" >&/dev/null; then
@@ -1144,7 +1144,7 @@ NODE_PROBLEM_DETECTOR_CUSTOM_FLAGS: $(yaml-quote "${NODE_PROBLEM_DETECTOR_CUSTOM
 CNI_STORAGE_URL_BASE: $(yaml-quote "${CNI_STORAGE_URL_BASE:-}")
 CNI_TAR_PREFIX: $(yaml-quote "${CNI_TAR_PREFIX:-}")
 CNI_VERSION: $(yaml-quote "${CNI_VERSION:-}")
-CNI_SHA1: $(yaml-quote "${CNI_SHA1:-}")
+CNI_HASH: $(yaml-quote "${CNI_HASH:-}")
 ENABLE_NODE_LOGGING: $(yaml-quote "${ENABLE_NODE_LOGGING:-false}")
 LOGGING_DESTINATION: $(yaml-quote "${LOGGING_DESTINATION:-}")
 ELASTICSEARCH_LOGGING_REPLICAS: $(yaml-quote "${ELASTICSEARCH_LOGGING_REPLICAS:-}")
@@ -1530,6 +1530,7 @@ NODE_BINARY_TAR_URL: $(yaml-quote "${NODE_BINARY_TAR_URL}")
 NODE_BINARY_TAR_HASH: $(yaml-quote "${NODE_BINARY_TAR_HASH}")
 CSI_PROXY_STORAGE_PATH: $(yaml-quote "${CSI_PROXY_STORAGE_PATH}")
 CSI_PROXY_VERSION: $(yaml-quote "${CSI_PROXY_VERSION}")
+ENABLE_CSI_PROXY: $(yaml-quote "${ENABLE_CSI_PROXY}")
 K8S_DIR: $(yaml-quote "${WINDOWS_K8S_DIR}")
 NODE_DIR: $(yaml-quote "${WINDOWS_NODE_DIR}")
 LOGS_DIR: $(yaml-quote "${WINDOWS_LOGS_DIR}")
@@ -1551,11 +1552,11 @@ WINDOWS_INFRA_CONTAINER: $(yaml-quote "${WINDOWS_INFRA_CONTAINER}")
 EOF
 }
 
-function sha1sum-file() {
-  if which sha1sum >/dev/null 2>&1; then
-    sha1sum "$1" | awk '{ print $1 }'
+function sha512sum-file() {
+  if which sha512sum >/dev/null 2>&1; then
+    sha512sum "$1" | awk '{ print $1 }'
   else
-    shasum -a1 "$1" | awk '{ print $1 }'
+    shasum -a512 "$1" | awk '{ print $1 }'
   fi
 }
 
@@ -1612,24 +1613,24 @@ function create-certs {
 
   # By default, linux wraps base64 output every 76 cols, so we use 'tr -d' to remove whitespaces.
   # Note 'base64 -w0' doesn't work on Mac OS X, which has different flags.
-  CA_KEY_BASE64=$(cat "${CERT_DIR}/pki/private/ca.key" | base64 | tr -d '\r\n')
-  CA_CERT_BASE64=$(cat "${CERT_DIR}/pki/ca.crt" | base64 | tr -d '\r\n')
-  MASTER_CERT_BASE64=$(cat "${CERT_DIR}/pki/issued/${MASTER_NAME}.crt" | base64 | tr -d '\r\n')
-  MASTER_KEY_BASE64=$(cat "${CERT_DIR}/pki/private/${MASTER_NAME}.key" | base64 | tr -d '\r\n')
-  KUBELET_CERT_BASE64=$(cat "${CERT_DIR}/pki/issued/kubelet.crt" | base64 | tr -d '\r\n')
-  KUBELET_KEY_BASE64=$(cat "${CERT_DIR}/pki/private/kubelet.key" | base64 | tr -d '\r\n')
-  KUBECFG_CERT_BASE64=$(cat "${CERT_DIR}/pki/issued/kubecfg.crt" | base64 | tr -d '\r\n')
-  KUBECFG_KEY_BASE64=$(cat "${CERT_DIR}/pki/private/kubecfg.key" | base64 | tr -d '\r\n')
-  KUBEAPISERVER_CERT_BASE64=$(cat "${CERT_DIR}/pki/issued/kube-apiserver.crt" | base64 | tr -d '\r\n')
-  KUBEAPISERVER_KEY_BASE64=$(cat "${CERT_DIR}/pki/private/kube-apiserver.key" | base64 | tr -d '\r\n')
+  CA_KEY_BASE64=$(base64 "${CERT_DIR}/pki/private/ca.key" | tr -d '\r\n')
+  CA_CERT_BASE64=$(base64 "${CERT_DIR}/pki/ca.crt" | tr -d '\r\n')
+  MASTER_CERT_BASE64=$(base64 "${CERT_DIR}/pki/issued/${MASTER_NAME}.crt" | tr -d '\r\n')
+  MASTER_KEY_BASE64=$(base64 "${CERT_DIR}/pki/private/${MASTER_NAME}.key" | tr -d '\r\n')
+  KUBELET_CERT_BASE64=$(base64 "${CERT_DIR}/pki/issued/kubelet.crt" | tr -d '\r\n')
+  KUBELET_KEY_BASE64=$(base64 "${CERT_DIR}/pki/private/kubelet.key" | tr -d '\r\n')
+  KUBECFG_CERT_BASE64=$(base64 "${CERT_DIR}/pki/issued/kubecfg.crt" | tr -d '\r\n')
+  KUBECFG_KEY_BASE64=$(base64 "${CERT_DIR}/pki/private/kubecfg.key" | tr -d '\r\n')
+  KUBEAPISERVER_CERT_BASE64=$(base64 "${CERT_DIR}/pki/issued/kube-apiserver.crt" | tr -d '\r\n')
+  KUBEAPISERVER_KEY_BASE64=$(base64 "${CERT_DIR}/pki/private/kube-apiserver.key" | tr -d '\r\n')
 
   # Setting up an addition directory (beyond pki) as it is the simplest way to
   # ensure we get a different CA pair to sign the proxy-client certs and which
   # we can send CA public key to the user-apiserver to validate communication.
-  AGGREGATOR_CA_KEY_BASE64=$(cat "${AGGREGATOR_CERT_DIR}/pki/private/ca.key" | base64 | tr -d '\r\n')
-  REQUESTHEADER_CA_CERT_BASE64=$(cat "${AGGREGATOR_CERT_DIR}/pki/ca.crt" | base64 | tr -d '\r\n')
-  PROXY_CLIENT_CERT_BASE64=$(cat "${AGGREGATOR_CERT_DIR}/pki/issued/proxy-client.crt" | base64 | tr -d '\r\n')
-  PROXY_CLIENT_KEY_BASE64=$(cat "${AGGREGATOR_CERT_DIR}/pki/private/proxy-client.key" | base64 | tr -d '\r\n')
+  AGGREGATOR_CA_KEY_BASE64=$(base64 "${AGGREGATOR_CERT_DIR}/pki/private/ca.key" | tr -d '\r\n')
+  REQUESTHEADER_CA_CERT_BASE64=$(base64 "${AGGREGATOR_CERT_DIR}/pki/ca.crt" | tr -d '\r\n')
+  PROXY_CLIENT_CERT_BASE64=$(base64 "${AGGREGATOR_CERT_DIR}/pki/issued/proxy-client.crt" | tr -d '\r\n')
+  PROXY_CLIENT_KEY_BASE64=$(base64 "${AGGREGATOR_CERT_DIR}/pki/private/proxy-client.key" | tr -d '\r\n')
 }
 
 # Set up easy-rsa directory structure.
@@ -2512,10 +2513,10 @@ function create-etcd-certs {
     generate-etcd-cert "${KUBE_TEMP}/cfssl" "${host}" "peer" "peer"
 
   pushd "${KUBE_TEMP}/cfssl"
-  ETCD_CA_KEY_BASE64=$(cat "ca-key.pem" | base64 | tr -d '\r\n')
-  ETCD_CA_CERT_BASE64=$(cat "ca.pem" | gzip | base64 | tr -d '\r\n')
-  ETCD_PEER_KEY_BASE64=$(cat "peer-key.pem" | base64 | tr -d '\r\n')
-  ETCD_PEER_CERT_BASE64=$(cat "peer.pem" | gzip | base64 | tr -d '\r\n')
+  ETCD_CA_KEY_BASE64=$(base64 "ca-key.pem" | tr -d '\r\n')
+  ETCD_CA_CERT_BASE64=$(gzip -c "ca.pem" | base64 | tr -d '\r\n')
+  ETCD_PEER_KEY_BASE64=$(base64 "peer-key.pem" | tr -d '\r\n')
+  ETCD_PEER_CERT_BASE64=$(gzip -c "peer.pem" | base64 | tr -d '\r\n')
   popd
 }
 
@@ -2551,12 +2552,12 @@ function create-etcd-apiserver-certs {
     generate-etcd-cert "${KUBE_TEMP}/cfssl" "${hostClient}" "client" "etcd-apiserver-client"
 
   pushd "${KUBE_TEMP}/cfssl"
-  ETCD_APISERVER_CA_KEY_BASE64=$(cat "ca-key.pem" | base64 | tr -d '\r\n')
-  ETCD_APISERVER_CA_CERT_BASE64=$(cat "ca.pem" | gzip | base64 | tr -d '\r\n')
-  ETCD_APISERVER_SERVER_KEY_BASE64=$(cat "etcd-apiserver-server-key.pem" | base64 | tr -d '\r\n')
-  ETCD_APISERVER_SERVER_CERT_BASE64=$(cat "etcd-apiserver-server.pem" | gzip | base64 | tr -d '\r\n')
-  ETCD_APISERVER_CLIENT_KEY_BASE64=$(cat "etcd-apiserver-client-key.pem" | base64 | tr -d '\r\n')
-  ETCD_APISERVER_CLIENT_CERT_BASE64=$(cat "etcd-apiserver-client.pem" | gzip | base64 | tr -d '\r\n')
+  ETCD_APISERVER_CA_KEY_BASE64=$(base64 "ca-key.pem" | tr -d '\r\n')
+  ETCD_APISERVER_CA_CERT_BASE64=$(gzip -c "ca.pem" | base64 | tr -d '\r\n')
+  ETCD_APISERVER_SERVER_KEY_BASE64=$(base64 "etcd-apiserver-server-key.pem" | tr -d '\r\n')
+  ETCD_APISERVER_SERVER_CERT_BASE64=$(gzip -c "etcd-apiserver-server.pem" | base64 | tr -d '\r\n')
+  ETCD_APISERVER_CLIENT_KEY_BASE64=$(base64 "etcd-apiserver-client-key.pem" | tr -d '\r\n')
+  ETCD_APISERVER_CLIENT_CERT_BASE64=$(gzip -c "etcd-apiserver-client.pem" | base64 | tr -d '\r\n')
   popd
 }
 
