@@ -176,6 +176,7 @@ func (m *ManagerImpl) genericDeviceUpdateCallback(resourceName string, devices [
 	m.healthyDevices[resourceName] = sets.NewString()
 	m.unhealthyDevices[resourceName] = sets.NewString()
 	m.allDevices[resourceName] = make(map[string]pluginapi.Device)
+	klog.Errorf("resourceName:%v, devices:%v", resourceName, devices)
 	for _, dev := range devices {
 		m.allDevices[resourceName][dev.ID] = dev
 		if dev.Health == pluginapi.Healthy {
@@ -233,7 +234,7 @@ func (m *ManagerImpl) checkpointFile() string {
 // podDevices and allocatedDevices information from checkpointed state and
 // starts device plugin registration service.
 func (m *ManagerImpl) Start(activePods ActivePodsFunc, sourcesReady config.SourcesReady) error {
-	klog.V(2).Infof("Starting Device Plugin manager")
+	klog.Errorf("sch: Starting Device Plugin manager")
 
 	m.activePods = activePods
 	m.sourcesReady = sourcesReady
@@ -275,7 +276,7 @@ func (m *ManagerImpl) Start(activePods ActivePodsFunc, sourcesReady config.Sourc
 		m.server.Serve(s)
 	}()
 
-	klog.V(2).Infof("Serving device plugin registration server on %q", socketPath)
+	klog.Errorf("sch: Serving device plugin registration server on %q", socketPath)
 
 	return nil
 }
@@ -311,7 +312,9 @@ func (m *ManagerImpl) ValidatePlugin(pluginName string, endpoint string, version
 // TODO: Start the endpoint and wait for the First ListAndWatch call
 //       before registering the plugin
 func (m *ManagerImpl) RegisterPlugin(pluginName string, endpoint string, versions []string) error {
-	klog.V(2).Infof("Registering Plugin %s at endpoint %s", pluginName, endpoint)
+	klog.Errorf("sch: Registering Plugin %s at endpoint %s", pluginName, endpoint)
+	
+	klog.Errorf("sch: ManagerImpl, RegisterPlugin -----")
 
 	e, err := newEndpointImpl(endpoint, pluginName, m.callback)
 	if err != nil {
@@ -405,6 +408,7 @@ func (m *ManagerImpl) UpdatePluginResources(node *schedulerframework.NodeInfo, a
 
 // Register registers a device plugin.
 func (m *ManagerImpl) Register(ctx context.Context, r *pluginapi.RegisterRequest) (*pluginapi.Empty, error) {
+	klog.Errorf("sch: ManagerImpl  Register------")
 	klog.Infof("Got registration request from device plugin with resource name %q", r.ResourceName)
 	metrics.DevicePluginRegistrationCount.WithLabelValues(r.ResourceName).Inc()
 	var versionCompatible bool
@@ -477,6 +481,8 @@ func (m *ManagerImpl) runEndpoint(resourceName string, e endpoint) {
 }
 
 func (m *ManagerImpl) addEndpoint(r *pluginapi.RegisterRequest) {
+	klog.Errorf("sch: addEndpoint, ManagerImpl--------------")
+
 	new, err := newEndpointImpl(filepath.Join(m.socketdir, r.Endpoint), r.ResourceName, m.callback)
 	if err != nil {
 		klog.Errorf("Failed to dial device plugin with request %v: %v", r, err)
@@ -519,6 +525,7 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, v1.ResourceList, []string)
 	var allocatable = v1.ResourceList{}
 	deletedResources := sets.NewString()
 	m.mutex.Lock()
+	klog.Errorf("healthyDevice:%v", m.healthyDevices)
 	for resourceName, devices := range m.healthyDevices {
 		eI, ok := m.endpoints[resourceName]
 		if (ok && eI.e.stopGracePeriodExpired()) || !ok {
@@ -560,6 +567,7 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, v1.ResourceList, []string)
 			klog.Errorf("writing checkpoint encountered %v", err)
 		}
 	}
+	klog.Errorf("allocatable:%v", allocatable)
 	return capacity, allocatable, deletedResources.UnsortedList()
 }
 
@@ -1078,3 +1086,4 @@ func (m *ManagerImpl) ShouldResetExtendedResourceCapacity() bool {
 	}
 	return false
 }
+

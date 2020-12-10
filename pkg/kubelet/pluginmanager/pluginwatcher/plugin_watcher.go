@@ -62,6 +62,11 @@ func (w *Watcher) Start(stopCh <-chan struct{}) error {
 		return fmt.Errorf("failed to start plugin fsWatcher, err: %v", err)
 	}
 	w.fsWatcher = fsWatcher
+	
+	i, _ := w.fs.ReadDir(w.path)
+	for _, p := range i {
+		klog.Errorf("sch: (w *Watcher) start, files:%v", p.Name())
+	}	
 
 	// Traverse plugin dir and add filesystem watchers before starting the plugin processing goroutine.
 	if err := w.traversePluginDir(w.path); err != nil {
@@ -74,6 +79,7 @@ func (w *Watcher) Start(stopCh <-chan struct{}) error {
 			case event := <-fsWatcher.Events:
 				//TODO: Handle errors by taking corrective measures
 				if event.Op&fsnotify.Create == fsnotify.Create {
+					klog.Errorf("<-- sch: go func(fsWatcher *fsnotify.Watcher)")
 					err := w.handleCreateEvent(event)
 					if err != nil {
 						klog.Errorf("error %v when handling create event: %s", err, event)
@@ -98,7 +104,7 @@ func (w *Watcher) Start(stopCh <-chan struct{}) error {
 }
 
 func (w *Watcher) init() error {
-	klog.V(4).Infof("Ensuring Plugin directory at %s ", w.path)
+	klog.Errorf("Ensuring Plugin directory at %s ", w.path)
 
 	if err := w.fs.MkdirAll(w.path, 0755); err != nil {
 		return fmt.Errorf("error (re-)creating root %s: %v", w.path, err)
@@ -115,6 +121,12 @@ func (w *Watcher) traversePluginDir(dir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to watch %s, err: %v", w.path, err)
 	}
+	
+	paths, _ := w.fs.ReadDir(dir)
+	for _, path := range paths {
+		klog.Errorf("sch: traversePluginDir, path:", path.Name())
+	}	
+
 	// traverse existing children in the dir
 	return w.fs.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -142,6 +154,7 @@ func (w *Watcher) traversePluginDir(dir string) error {
 				Op:   fsnotify.Create,
 			}
 			//TODO: Handle errors by taking corrective measures
+			klog.Errorf("<-- sch: traversePluginDir -> handleCreateEvent")
 			if err := w.handleCreateEvent(event); err != nil {
 				klog.Errorf("error %v when handling create event: %s", err, event)
 			}
@@ -157,7 +170,7 @@ func (w *Watcher) traversePluginDir(dir string) error {
 // Files names:
 // - MUST NOT start with a '.'
 func (w *Watcher) handleCreateEvent(event fsnotify.Event) error {
-	klog.V(6).Infof("Handling create event: %v", event)
+	klog.Errorf("Handling create event: %v", event)
 
 	fi, err := os.Stat(event.Name)
 	if err != nil {
@@ -194,7 +207,7 @@ func (w *Watcher) handlePluginRegistration(socketPath string) error {
 	// a possibility that it has been deleted and recreated again before it is
 	// removed from the desired world cache, so we still need to call AddOrUpdatePlugin
 	// in this case to update the timestamp
-	klog.V(2).Infof("Adding socket path or updating timestamp %s to desired state cache", socketPath)
+	klog.Errorf("Adding socket path or updating timestamp %s to desired state cache", socketPath)
 	err := w.desiredStateOfWorld.AddOrUpdatePlugin(socketPath)
 	if err != nil {
 		return fmt.Errorf("error adding socket path %s or updating timestamp to desired state cache: %v", socketPath, err)

@@ -19,6 +19,7 @@ package devicemanager
 import (
 	"fmt"
 	"io/ioutil"
+	"k8s.io/klog/v2"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -239,6 +240,7 @@ func setupDeviceManager(t *testing.T, devs []*pluginapi.Device, callback monitor
 	originalCallback := m.callback
 	m.callback = func(resourceName string, devices []pluginapi.Device) {
 		originalCallback(resourceName, devices)
+		klog.Errorf("execute callback, send signal to upatechan")
 		updateChan <- new(interface{})
 	}
 	activePods := func() []*v1.Pod {
@@ -259,6 +261,7 @@ func setupDevicePlugin(t *testing.T, devs []*pluginapi.Device, pluginSocketName 
 }
 
 func setupPluginManager(t *testing.T, pluginSocketName string, m Manager) pluginmanager.PluginManager {
+	klog.Errorf("sockDir:%v", filepath.Dir(pluginSocketName))
 	pluginManager := pluginmanager.NewPluginManager(
 		filepath.Dir(pluginSocketName), /* sockDir */
 		&record.FakeRecorder{},
@@ -1080,3 +1083,4 @@ func makeDevice(devOnNUMA checkpoint.DevicesPerNUMA, topology bool) map[string]p
 	}
 	return res
 }
+
