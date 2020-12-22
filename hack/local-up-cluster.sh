@@ -37,13 +37,13 @@ KUBELET_IMAGE=${KUBELET_IMAGE:-""}
 # many dev environments run with swap on, so we don't fail in this env
 FAIL_SWAP_ON=${FAIL_SWAP_ON:-"false"}
 # Name of the network plugin, eg: "kubenet"
-NET_PLUGIN=${NET_PLUGIN:-""}
+NET_PLUGIN=${NET_PLUGIN:-"kubenet"}
 # Place the config files and binaries required by NET_PLUGIN in these directory,
 # eg: "/etc/cni/net.d" for config files, and "/opt/cni/bin" for binaries.
 CNI_CONF_DIR=${CNI_CONF_DIR:-""}
 CNI_BIN_DIR=${CNI_BIN_DIR:-""}
-CLUSTER_CIDR=${CLUSTER_CIDR:-10.1.0.0/16}
-SERVICE_CLUSTER_IP_RANGE=${SERVICE_CLUSTER_IP_RANGE:-10.0.0.0/24}
+CLUSTER_CIDR=${CLUSTER_CIDR:-10.1.0.0/16,fc00::/48}
+SERVICE_CLUSTER_IP_RANGE=${SERVICE_CLUSTER_IP_RANGE:-10.0.0.0/24,fd00::/108}
 FIRST_SERVICE_CLUSTER_IP=${FIRST_SERVICE_CLUSTER_IP:-10.0.0.1}
 # if enabled, must set CGROUP_ROOT
 CGROUPS_PER_QOS=${CGROUPS_PER_QOS:-true}
@@ -81,7 +81,7 @@ EXTERNAL_CLOUD_VOLUME_PLUGIN=${EXTERNAL_CLOUD_VOLUME_PLUGIN:-""}
 CLOUD_PROVIDER=${CLOUD_PROVIDER:-""}
 CLOUD_CONFIG=${CLOUD_CONFIG:-""}
 KUBELET_PROVIDER_ID=${KUBELET_PROVIDER_ID:-"$(hostname)"}
-FEATURE_GATES=${FEATURE_GATES:-"AllAlpha=false"}
+FEATURE_GATES=${FEATURE_GATES:-"IPv6DualStack=true"}
 STORAGE_BACKEND=${STORAGE_BACKEND:-"etcd3"}
 STORAGE_MEDIA_TYPE=${STORAGE_MEDIA_TYPE:-"application/vnd.kubernetes.protobuf"}
 # preserve etcd data. you also need to set ETCD_DIR.
