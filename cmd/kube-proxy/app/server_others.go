@@ -85,22 +85,26 @@ func newProxyServer(
 		return nil, errors.New("config is required")
 	}
 
+	// 注册接口
 	if c, err := configz.New(proxyconfigapi.GroupName); err == nil {
 		c.Set(config)
 	} else {
 		return nil, fmt.Errorf("unable to register configz: %s", err)
 	}
 
+	// 关键依赖工具 iptables(ipt)、ipvs、ipset
 	var iptInterface utiliptables.Interface
 	var ipvsInterface utilipvs.Interface
 	var kernelHandler ipvs.KernelHandler
 	var ipsetInterface utilipset.Interface
 
 	// Create a iptables utils.
+	// 执行 linux 命令行的工具
 	execer := exec.New()
 
 	kernelHandler = ipvs.NewLinuxKernelHandler()
 	ipsetInterface = utilipset.New(execer)
+	// 检查是否可以使用 IPVS 模式
 	canUseIPVS, err := ipvs.CanUseIPVSProxier(kernelHandler, ipsetInterface, config.IPVS.Scheduler)
 	if string(config.Mode) == proxyModeIPVS && err != nil {
 		klog.Errorf("Can't use the IPVS proxier: %v", err)
@@ -111,6 +115,7 @@ func newProxyServer(
 	}
 
 	// We omit creation of pretty much everything if we run in cleanup mode
+	// cleanupAndExit 字段设置直接返回
 	if cleanupAndExit {
 		return &ProxyServer{
 			execer:         execer,
@@ -128,6 +133,7 @@ func newProxyServer(
 		return nil, err
 	}
 
+	// 初始化 kube-client 和 evenclient, 这两个都是用同样的方法进行初始化，只是用途不一样
 	client, eventClient, err := createClients(config.ClientConnection, master)
 	if err != nil {
 		return nil, err
@@ -155,11 +161,13 @@ func newProxyServer(
 		Namespace: "",
 	}
 
+	// 初始化 healthzServer
 	var healthzServer healthcheck.ProxierHealthUpdater
 	if len(config.HealthzBindAddress) > 0 {
 		healthzServer = healthcheck.NewProxierHealthServer(config.HealthzBindAddress, 2*config.IPTables.SyncPeriod.Duration, recorder, nodeRef)
 	}
 
+	// proxier 是一个 interface，每种模式都是一个 proxier
 	var proxier proxy.Provider
 	var detectLocalMode proxyconfigapi.LocalMode
 
@@ -210,6 +218,7 @@ func newProxyServer(
 			}
 
 			// TODO this has side effects that should only happen when Run() is invoked.
+			// 9.初始化 iptables 模式的 proxier, 双栈模式
 			proxier, err = iptables.NewDualStackProxier(
 				ipt,
 				utilsysctl.New(),
@@ -233,6 +242,7 @@ func newProxyServer(
 			}
 
 			// TODO this has side effects that should only happen when Run() is invoked.
+			// 9.初始化 iptables 模式的 proxier
 			proxier, err = iptables.NewProxier(
 				iptInterface,
 				utilsysctl.New(),
@@ -255,6 +265,7 @@ func newProxyServer(
 		}
 		proxymetrics.RegisterMetrics()
 	} else if proxyMode == proxyModeIPVS {
+		// 初始化 ipvs 模式的 proxier
 		klog.V(0).Info("Using ipvs Proxier.")
 		if utilfeature.DefaultFeatureGate.Enabled(features.IPv6DualStack) {
 			klog.V(0).Info("creating dualStackProxier for ipvs.")
@@ -341,7 +352,7 @@ func newProxyServer(
 		proxymetrics.RegisterMetrics()
 	} else {
 		klog.V(0).Info("Using userspace Proxier.")
-
+		// 初始化 userspace 模式的 proxier
 		// TODO this has side effects that should only happen when Run() is invoked.
 		proxier, err = userspace.NewProxier(
 			userspace.NewLoadBalancerRR(),
@@ -603,3 +614,4 @@ func tryIPTablesProxy(kcompat iptables.KernelCompatTester) string {
 	klog.V(1).Infof("Can't use iptables proxy, using userspace proxier")
 	return proxyModeUserspace
 }
+

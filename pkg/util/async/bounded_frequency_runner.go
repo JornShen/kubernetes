@@ -198,8 +198,10 @@ func (bfr *BoundedFrequencyRunner) Loop(stop <-chan struct{}) {
 			klog.V(3).Infof("%s Loop stopping", bfr.name)
 			return
 		case <-bfr.timer.C():
+			// 定时任务
 			bfr.tryRun()
 		case <-bfr.run:
+			// 由 run() 方法进行触发
 			bfr.tryRun()
 		case <-bfr.retry:
 			bfr.doRetry()
@@ -289,6 +291,7 @@ func (bfr *BoundedFrequencyRunner) tryRun() {
 
 	if bfr.limiter.TryAccept() {
 		// We're allowed to run the function right now.
+		// 执行 syncrules 方法更新规则
 		bfr.fn()
 		bfr.lastRun = bfr.timer.Now()
 		bfr.timer.Stop()
@@ -311,3 +314,4 @@ func (bfr *BoundedFrequencyRunner) tryRun() {
 	bfr.timer.Stop()
 	bfr.timer.Reset(nextScheduled)
 }
+

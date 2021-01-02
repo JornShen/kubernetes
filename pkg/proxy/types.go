@@ -26,6 +26,7 @@ import (
 )
 
 // Provider is the interface provided by proxier implementations.
+// 定义 service、endpoints 和 endpointSlice、 Node handler 接口
 type Provider interface {
 	config.EndpointsHandler
 	config.EndpointSliceHandler
@@ -112,3 +113,4 @@ type ServiceEndpoint struct {
 	Endpoint        string
 	ServicePortName ServicePortName
 }
+

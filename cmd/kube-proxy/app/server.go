@@ -229,13 +229,14 @@ func (o *Options) Complete() error {
 	}
 
 	// Load the config file here in Complete, so that Validate validates the fully-resolved config.
+	// 加载配置文件
 	if len(o.ConfigFile) > 0 {
 		c, err := o.loadConfigFromFile(o.ConfigFile)
 		if err != nil {
 			return err
 		}
 		o.config = c
-
+		// 监听文件变化
 		if err := o.initWatcher(); err != nil {
 			return err
 		}
@@ -305,31 +306,36 @@ func (o *Options) Validate() error {
 // Run runs the specified ProxyServer.
 func (o *Options) Run() error {
 	defer close(o.errCh)
+	// 指定了 --write-config-to 参数，则将默认的配置文件写到指定文件并退出
 	if len(o.WriteConfigTo) > 0 {
 		return o.writeConfigFile()
 	}
-
+	// 初始化 ProxyServer 对象
 	proxyServer, err := NewProxyServer(o)
 	if err != nil {
 		return err
 	}
 
+	// 如果启动参数 --cleanup 设置为 true，则清理 iptables 和 ipvs 规则并退出
 	if o.CleanupAndExit {
 		return proxyServer.CleanupAndExit()
 	}
 
 	o.proxyServer = proxyServer
+	// 启动 proxyserver
 	return o.runLoop()
 }
 
 // runLoop will watch on the update change of the proxy server's configuration file.
 // Return an error when updated
 func (o *Options) runLoop() error {
+	// 监听文件
 	if o.watcher != nil {
 		o.watcher.Run()
 	}
 
 	// run the proxy in goroutine
+	// 正式启动 proxyServer
 	go func() {
 		err := o.proxyServer.Run()
 		o.errCh <- err
@@ -483,10 +489,11 @@ with the apiserver API to configure the proxy.`,
 			if err := initForOS(opts.WindowsService); err != nil {
 				klog.Fatalf("failed OS init: %v", err)
 			}
-
+			//
 			if err := opts.Complete(); err != nil {
 				klog.Fatalf("failed complete: %v", err)
 			}
+			// 参数校验
 			if err := opts.Validate(); err != nil {
 				klog.Fatalf("failed validate: %v", err)
 			}
@@ -510,7 +517,7 @@ with the apiserver API to configure the proxy.`,
 	if err != nil {
 		klog.Fatalf("unable to create flag defaults: %v", err)
 	}
-
+	// cmd.Flags() 初始化 flag， addFlags 设置参数
 	opts.AddFlags(cmd.Flags())
 
 	// TODO handle error
@@ -650,6 +657,7 @@ func (s *ProxyServer) Run() error {
 	klog.Infof("Version: %+v", version.Get())
 
 	// TODO(vmarmol): Use container config for this.
+	// 设置 进程 OOMScore， 控制当系统负载过高时，进程被杀的顺序
 	var oomAdjuster *oom.OOMAdjuster
 	if s.OOMScoreAdj != nil {
 		oomAdjuster = oom.NewOOMAdjuster()
@@ -658,6 +666,7 @@ func (s *ProxyServer) Run() error {
 		}
 	}
 
+	// 设置 event 事件处理钩子
 	if s.Broadcaster != nil && s.EventClient != nil {
 		s.Broadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: s.EventClient.Events("")})
 	}
@@ -670,13 +679,16 @@ func (s *ProxyServer) Run() error {
 	}
 
 	// Start up a healthz server if requested
+	// 2.启动 healthz server, 端口 10256
 	serveHealthz(s.HealthzServer, errCh)
 
 	// Start up a metrics server if requested
+	// 3.启动 metrics server, 端口 10249
 	serveMetrics(s.MetricsBindAddress, s.ProxyMode, s.EnableProfiling, errCh)
 
 	// Tune conntrack, if requested
 	// Conntracker is always nil for windows
+	// 4.配置 conntrack，设置内核参数 nf_conntrack_max, nf_conntrack_tcp_timeout_established 和 nf_conntrack_tcp_timeout_close_wait
 	if s.Conntracker != nil {
 		max, err := getConntrackMax(s.ConntrackConfiguration)
 		if err != nil {
@@ -729,6 +741,7 @@ func (s *ProxyServer) Run() error {
 	labelSelector := labels.NewSelector()
 	labelSelector = labelSelector.Add(*noProxyName, *noHeadlessEndpoints)
 
+	// 启动 informer 监听 Services 和 Endpoints
 	// Make informers that filter out objects that want a non-default service proxy.
 	informerFactory := informers.NewSharedInformerFactoryWithOptions(s.Client, s.ConfigSyncPeriod,
 		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
@@ -739,6 +752,7 @@ func (s *ProxyServer) Run() error {
 	// Note: RegisterHandler() calls need to happen before creation of Sources because sources
 	// only notify on changes, and the initial update (on process start) may be lost if no handlers
 	// are registered yet.
+	// 将 proxier 注册到 serviceConfig、endpointsConfig 中
 	serviceConfig := config.NewServiceConfig(informerFactory.Core().V1().Services(), s.ConfigSyncPeriod)
 	serviceConfig.RegisterEventHandler(s.Proxier)
 	go serviceConfig.Run(wait.NeverStop)
@@ -755,8 +769,10 @@ func (s *ProxyServer) Run() error {
 
 	// This has to start after the calls to NewServiceConfig and NewEndpointsConfig because those
 	// functions must configure their shared informer event handlers first.
+	// 启动 informer
 	informerFactory.Start(wait.NeverStop)
 
+	// ServiceTopology 处理
 	if utilfeature.DefaultFeatureGate.Enabled(features.ServiceTopology) {
 		// Make an informer that selects for our nodename.
 		currentNodeInformerFactory := informers.NewSharedInformerFactoryWithOptions(s.Client, s.ConfigSyncPeriod,
@@ -774,7 +790,7 @@ func (s *ProxyServer) Run() error {
 
 	// Birth Cry after the birth is successful
 	s.birthCry()
-
+	// 启动 proxier 主循环
 	go s.Proxier.SyncLoop()
 
 	return <-errCh
@@ -821,3 +837,4 @@ func (s *ProxyServer) CleanupAndExit() error {
 
 	return nil
 }
+

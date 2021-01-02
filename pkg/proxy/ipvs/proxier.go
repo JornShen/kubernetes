@@ -361,6 +361,7 @@ func NewProxier(ipt utiliptables.Interface,
 	kernelHandler KernelHandler,
 ) (*Proxier, error) {
 	// Set the route_localnet sysctl we need for
+	// 设置内核参数
 	if err := utilproxy.EnsureSysctl(sysctl, sysctlRouteLocalnet, 1); err != nil {
 		return nil, err
 	}
@@ -430,6 +431,7 @@ func NewProxier(ipt utiliptables.Interface,
 		}
 	}
 
+	// 生成 masquerade 标记
 	// Generate the masquerade mark to use for SNAT rules.
 	masqueradeValue := 1 << uint(masqueradeBit)
 	masqueradeMark := fmt.Sprintf("%#08x", masqueradeValue)
@@ -443,6 +445,7 @@ func NewProxier(ipt utiliptables.Interface,
 
 	if len(scheduler) == 0 {
 		klog.Warningf("IPVS scheduler not specified, use %s by default", DefaultScheduler)
+		// 默认调度规则：rr（轮询）
 		scheduler = DefaultScheduler
 	}
 
@@ -450,11 +453,13 @@ func NewProxier(ipt utiliptables.Interface,
 
 	endpointSlicesEnabled := utilfeature.DefaultFeatureGate.Enabled(features.EndpointSliceProxying)
 
-	var incorrectAddresses []string
-	nodePortAddresses, incorrectAddresses = utilproxy.FilterIncorrectCIDRVersion(nodePortAddresses, ipFamily)
-	if len(incorrectAddresses) > 0 {
-		klog.Warningf("NodePortAddresses of wrong family; %s", incorrectAddresses)
+	ipFamilyMap := utilproxy.MapCIDRsByIPFamily(nodePortAddresses)
+	nodePortAddresses = ipFamilyMap[ipFamily]
+	// Log the IPs not matching the ipFamily
+	if ips, ok := ipFamilyMap[utilproxy.OtherIPFamily(ipFamily)]; ok && len(ips) > 0 {
+		klog.Warningf("IP Family: %s, NodePortAddresses of wrong family; %s", ipFamily, strings.Join(ips, ","))
 	}
+
 	proxier := &Proxier{
 		ipFamily:              ipFamily,
 		portsMap:              make(map[utilproxy.LocalPort]utilproxy.Closeable),
@@ -491,6 +496,8 @@ func NewProxier(ipt utiliptables.Interface,
 		networkInterfacer:     utilproxy.RealNetwork{},
 		gracefuldeleteManager: NewGracefulTerminationManager(ipvs),
 	}
+
+	// 初始化 ipset 规则
 	// initialize ipsetList with all sets we needed
 	proxier.ipsetList = make(map[string]*IPSet)
 	for _, is := range ipsetInfo {
@@ -499,7 +506,9 @@ func NewProxier(ipt utiliptables.Interface,
 	burstSyncs := 2
 	klog.V(2).Infof("ipvs(%s) sync params: minSyncPeriod=%v, syncPeriod=%v, burstSyncs=%d",
 		ipt.Protocol(), minSyncPeriod, syncPeriod, burstSyncs)
+	// 初始化 syncRunner
 	proxier.syncRunner = async.NewBoundedFrequencyRunner("sync-runner", proxier.syncProxyRules, minSyncPeriod, syncPeriod, burstSyncs)
+	// 启动 gracefuldeleteManager
 	proxier.gracefuldeleteManager.Run()
 	return proxier, nil
 }
@@ -532,14 +541,14 @@ func NewDualStackProxier(
 
 	safeIpset := newSafeIpset(ipset)
 
-	nodePortAddresses4, nodePortAddresses6 := utilproxy.FilterIncorrectCIDRVersion(nodePortAddresses, v1.IPv4Protocol)
+	ipFamilyMap := utilproxy.MapCIDRsByIPFamily(nodePortAddresses)
 
 	// Create an ipv4 instance of the single-stack proxier
 	ipv4Proxier, err := NewProxier(ipt[0], ipvs, safeIpset, sysctl,
 		exec, syncPeriod, minSyncPeriod, filterCIDRs(false, excludeCIDRs), strictARP,
 		tcpTimeout, tcpFinTimeout, udpTimeout, masqueradeAll, masqueradeBit,
 		localDetectors[0], hostname, nodeIP[0],
-		recorder, healthzServer, scheduler, nodePortAddresses4, kernelHandler)
+		recorder, healthzServer, scheduler, ipFamilyMap[v1.IPv4Protocol], kernelHandler)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create ipv4 proxier: %v", err)
 	}
@@ -548,7 +557,7 @@ func NewDualStackProxier(
 		exec, syncPeriod, minSyncPeriod, filterCIDRs(true, excludeCIDRs), strictARP,
 		tcpTimeout, tcpFinTimeout, udpTimeout, masqueradeAll, masqueradeBit,
 		localDetectors[1], hostname, nodeIP[1],
-		nil, nil, scheduler, nodePortAddresses6, kernelHandler)
+		nil, nil, scheduler, ipFamilyMap[v1.IPv6Protocol], kernelHandler)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create ipv6 proxier: %v", err)
 	}
@@ -1057,6 +1066,8 @@ func (proxier *Proxier) syncProxyRules() {
 	// We assume that if this was called, we really want to sync them,
 	// even if nothing changed in the meantime. In other words, callers are
 	// responsible for detecting no-op changes and not calling this function.
+
+	// 更新 proxier.endpointsMap，proxier.servieMap 两个对象。
 	serviceUpdateResult := proxy.UpdateServiceMap(proxier.serviceMap, proxier.serviceChanges)
 	endpointUpdateResult := proxier.endpointsMap.Update(proxier.endpointsChanges)
 
@@ -1087,9 +1098,11 @@ func (proxier *Proxier) syncProxyRules() {
 	writeLine(proxier.filterChains, "*filter")
 	writeLine(proxier.natChains, "*nat")
 
-	proxier.createAndLinkeKubeChain()
+	// 创建kubernetes的表连接链数据
+	proxier.createAndLinkKubeChain()
 
 	// make sure dummy interface exists in the system where ipvs Proxier will bind service address on it
+	// 创建 dummy interface kube-ipvs0, 用来挂在 ipvs 的 service ip
 	_, err = proxier.netlinkHandle.EnsureDummyDevice(DefaultDummyDevice)
 	if err != nil {
 		klog.Errorf("Failed to create dummy interface: %s, error: %v", DefaultDummyDevice, err)
@@ -1097,6 +1110,7 @@ func (proxier *Proxier) syncProxyRules() {
 	}
 
 	// make sure ip sets exists in the system.
+	// 创建 ipset 规则
 	for _, set := range proxier.ipsetList {
 		if err := ensureIPSet(set); err != nil {
 			return
@@ -1167,6 +1181,7 @@ func (proxier *Proxier) syncProxyRules() {
 	nodeIPs = nodeIPs[:idx]
 
 	// Build IPVS rules for each service.
+	// 为每个服务创建ipvs规则
 	for svcName, svc := range proxier.serviceMap {
 		svcInfo, ok := svc.(*serviceInfo)
 		if !ok {
@@ -1180,6 +1195,7 @@ func (proxier *Proxier) syncProxyRules() {
 		svcNameString := svcName.String()
 
 		// Handle traffic that loops back to the originator with SNAT.
+		// 根据 endpoint 列表，更新 KUBE-LOOP-BACK 的 ipset 列表
 		for _, e := range proxier.endpointsMap[svcName] {
 			ep, ok := e.(*proxy.BaseEndpointInfo)
 			if !ok {
@@ -1211,6 +1227,7 @@ func (proxier *Proxier) syncProxyRules() {
 
 		// Capture the clusterIP.
 		// ipset call
+		// 对于 clusterIP 类型更新对应的 ipset 列表 KUBE-CLUSTER-IP
 		entry := &utilipset.Entry{
 			IP:       svcInfo.ClusterIP().String(),
 			Port:     svcInfo.Port(),
@@ -1237,11 +1254,13 @@ func (proxier *Proxier) syncProxyRules() {
 			serv.Timeout = uint32(svcInfo.StickyMaxAgeSeconds())
 		}
 		// We need to bind ClusterIP to dummy interface, so set `bindAddr` parameter to `true` in syncService()
+		// 为 dummy device 绑定 ip
 		if err := proxier.syncService(svcNameString, serv, true, bindedAddresses); err == nil {
 			activeIPVSServices[serv.String()] = true
 			activeBindAddrs[serv.Address.String()] = true
 			// ExternalTrafficPolicy only works for NodePort and external LB traffic, does not affect ClusterIP
 			// So we still need clusterIP rules in onlyNodeLocalEndpoints mode.
+			// 更新 endpoint 信息
 			if err := proxier.syncEndpoint(svcName, false, serv); err != nil {
 				klog.Errorf("Failed to sync endpoint for service: %v, err: %v", serv, err)
 			}
@@ -1250,6 +1269,7 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 
 		// Capture externalIPs.
+		// 为 externalIP 创建 ipvs 规则。
 		for _, externalIP := range svcInfo.ExternalIPStrings() {
 			// If the "external" IP happens to be an IP that is local to this
 			// machine, hold the local port open so no other process can open it
@@ -1332,6 +1352,7 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 
 		// Capture load-balancer ingress.
+		// 为 load-balancer类型创建 ipvs 规则
 		for _, ingress := range svcInfo.LoadBalancerIPStrings() {
 			if ingress != "" {
 				// ipset call
@@ -1433,6 +1454,7 @@ func (proxier *Proxier) syncProxyRules() {
 			}
 		}
 
+		// 为 nodePort 类型创建 ipvs 规则。
 		if svcInfo.NodePort() != 0 {
 			if len(nodeAddresses) == 0 || len(nodeIPs) == 0 {
 				// Skip nodePort configuration since an error occurred when
@@ -1591,6 +1613,7 @@ func (proxier *Proxier) syncProxyRules() {
 	}
 
 	// sync ipset entries
+	// 更新 ipset 规则
 	for _, set := range proxier.ipsetList {
 		set.syncIPSetEntries()
 	}
@@ -1599,6 +1622,7 @@ func (proxier *Proxier) syncProxyRules() {
 	// in a single loop per ip set.
 	proxier.writeIptablesRules()
 
+	// 同步 iptables 规则
 	// Sync iptables rules.
 	// NOTE: NoFlushTables is used so we don't flush non-kubernetes chains in the table.
 	proxier.iptablesData.Reset()
@@ -1882,8 +1906,8 @@ func (proxier *Proxier) acceptIPVSTraffic() {
 	}
 }
 
-// createAndLinkeKubeChain create all kube chains that ipvs proxier need and write basic link.
-func (proxier *Proxier) createAndLinkeKubeChain() {
+// createAndLinkKubeChain create all kube chains that ipvs proxier need and write basic link.
+func (proxier *Proxier) createAndLinkKubeChain() {
 	existingFilterChains := proxier.getExistingChains(proxier.filterChainsData, utiliptables.TableFilter)
 	existingNATChains := proxier.getExistingChains(proxier.iptablesData, utiliptables.TableNAT)
 
@@ -1905,13 +1929,13 @@ func (proxier *Proxier) createAndLinkeKubeChain() {
 			if chain, ok := existingNATChains[ch.chain]; ok {
 				writeBytesLine(proxier.natChains, chain)
 			} else {
-				writeLine(proxier.natChains, utiliptables.MakeChainLine(kubePostroutingChain))
+				writeLine(proxier.natChains, utiliptables.MakeChainLine(ch.chain))
 			}
 		} else {
-			if chain, ok := existingFilterChains[KubeForwardChain]; ok {
+			if chain, ok := existingFilterChains[ch.chain]; ok {
 				writeBytesLine(proxier.filterChains, chain)
 			} else {
-				writeLine(proxier.filterChains, utiliptables.MakeChainLine(KubeForwardChain))
+				writeLine(proxier.filterChains, utiliptables.MakeChainLine(ch.chain))
 			}
 		}
 	}
@@ -2262,3 +2286,4 @@ func openLocalPort(lp *utilproxy.LocalPort, isIPv6 bool) (utilproxy.Closeable, e
 // Chain KUBE-MARK-MASQ (0 references)
 // target     prot opt source               destination
 // MARK       all  --  0.0.0.0/0            0.0.0.0/0            MARK or 0x4000
+

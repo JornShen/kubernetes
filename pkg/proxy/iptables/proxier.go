@@ -269,6 +269,7 @@ func NewProxier(ipt utiliptables.Interface,
 	nodePortAddresses []string,
 ) (*Proxier, error) {
 	// Set the route_localnet sysctl we need for
+	// 是否允许外部访问localhost
 	if err := utilproxy.EnsureSysctl(sysctl, sysctlRouteLocalnet, 1); err != nil {
 		return nil, err
 	}
@@ -276,11 +277,15 @@ func NewProxier(ipt utiliptables.Interface,
 	// Proxy needs br_netfilter and bridge-nf-call-iptables=1 when containers
 	// are connected to a Linux bridge (but not SDN bridges).  Until most
 	// plugins handle this, log when config is missing
+	// 为二层的网桥在转发包时也会被iptables的FORWARD规则所过滤，这样就会出现L3层的iptables rules去过滤L2的帧的问题
 	if val, err := sysctl.GetSysctl(sysctlBridgeCallIPTables); err == nil && val != 1 {
 		klog.Warning("missing br-netfilter module or unset sysctl br-nf-call-iptables; proxy may not work as intended")
 	}
 
 	// Generate the masquerade mark to use for SNAT rules.
+	// 2.设置 masqueradeMark，默认为 0x00004000/0x00004000
+	// 用来标记 k8s 管理的报文，masqueradeBit 默认为 14
+	// 标记 0x4000 的报文（即 POD 发出的报文)，在离开 Node 的时候需要进行 SNAT 转换
 	masqueradeValue := 1 << uint(masqueradeBit)
 	masqueradeMark := fmt.Sprintf("%#08x", masqueradeValue)
 	klog.V(2).Infof("iptables(%s) masquerade mark: %s", ipt.Protocol(), masqueradeMark)
@@ -294,12 +299,14 @@ func NewProxier(ipt utiliptables.Interface,
 		ipFamily = v1.IPv6Protocol
 	}
 
-	var incorrectAddresses []string
-	nodePortAddresses, incorrectAddresses = utilproxy.FilterIncorrectCIDRVersion(nodePortAddresses, ipFamily)
-	if len(incorrectAddresses) > 0 {
-		klog.Warningf("NodePortAddresses of wrong family; %s", incorrectAddresses)
+	ipFamilyMap := utilproxy.MapCIDRsByIPFamily(nodePortAddresses)
+	nodePortAddresses = ipFamilyMap[ipFamily]
+	// Log the IPs not matching the ipFamily
+	if ips, ok := ipFamilyMap[utilproxy.OtherIPFamily(ipFamily)]; ok && len(ips) > 0 {
+		klog.Warningf("IP Family: %s, NodePortAddresses of wrong family; %s", ipFamily, strings.Join(ips, ","))
 	}
 
+	// 3.初始化 proxier
 	proxier := &Proxier{
 		portsMap:                 make(map[utilproxy.LocalPort]utilproxy.Closeable),
 		serviceMap:               make(proxy.ServiceMap),
@@ -335,6 +342,7 @@ func NewProxier(ipt utiliptables.Interface,
 	// We pass syncPeriod to ipt.Monitor, which will call us only if it needs to.
 	// We need to pass *some* maxInterval to NewBoundedFrequencyRunner anyway though.
 	// time.Hour is arbitrary.
+	// 初始化 syncRunner 为定时器，定时执行 proxier.syncProxyRules，
 	proxier.syncRunner = async.NewBoundedFrequencyRunner("sync-runner", proxier.syncProxyRules, minSyncPeriod, time.Hour, burstSyncs)
 
 	go ipt.Monitor(utiliptables.Chain("KUBE-PROXY-CANARY"),
@@ -367,17 +375,17 @@ func NewDualStackProxier(
 	nodePortAddresses []string,
 ) (proxy.Provider, error) {
 	// Create an ipv4 instance of the single-stack proxier
-	nodePortAddresses4, nodePortAddresses6 := utilproxy.FilterIncorrectCIDRVersion(nodePortAddresses, v1.IPv4Protocol)
+	ipFamilyMap := utilproxy.MapCIDRsByIPFamily(nodePortAddresses)
 	ipv4Proxier, err := NewProxier(ipt[0], sysctl,
 		exec, syncPeriod, minSyncPeriod, masqueradeAll, masqueradeBit, localDetectors[0], hostname,
-		nodeIP[0], recorder, healthzServer, nodePortAddresses4)
+		nodeIP[0], recorder, healthzServer, ipFamilyMap[v1.IPv4Protocol])
 	if err != nil {
 		return nil, fmt.Errorf("unable to create ipv4 proxier: %v", err)
 	}
 
 	ipv6Proxier, err := NewProxier(ipt[1], sysctl,
 		exec, syncPeriod, minSyncPeriod, masqueradeAll, masqueradeBit, localDetectors[1], hostname,
-		nodeIP[1], recorder, healthzServer, nodePortAddresses6)
+		nodeIP[1], recorder, healthzServer, ipFamilyMap[v1.IPv6Protocol])
 	if err != nil {
 		return nil, fmt.Errorf("unable to create ipv6 proxier: %v", err)
 	}
@@ -808,6 +816,7 @@ func (proxier *Proxier) appendServiceCommentLocked(args []string, svcName string
 // This is where all of the iptables-save/restore calls happen.
 // The only other iptables rules are those that are setup in iptablesInit()
 // This assumes proxier.mu is NOT held
+// 核心方法，负责规则的刷新
 func (proxier *Proxier) syncProxyRules() {
 	proxier.mu.Lock()
 	defer proxier.mu.Unlock()
@@ -843,6 +852,8 @@ func (proxier *Proxier) syncProxyRules() {
 	// We assume that if this was called, we really want to sync them,
 	// even if nothing changed in the meantime. In other words, callers are
 	// responsible for detecting no-op changes and not calling this function.
+
+	// 更新 proxier.endpointsMap，proxier.servieMap 两个对象。
 	serviceUpdateResult := proxy.UpdateServiceMap(proxier.serviceMap, proxier.serviceChanges)
 	endpointUpdateResult := proxier.endpointsMap.Update(proxier.endpointsChanges)
 
@@ -869,6 +880,7 @@ func (proxier *Proxier) syncProxyRules() {
 	}()
 
 	// Create and link the kube chains.
+	// 创建自定义链
 	for _, jump := range iptablesJumpChains {
 		if _, err := proxier.iptables.EnsureChain(jump.table, jump.dstChain); err != nil {
 			klog.Errorf("Failed to ensure that %s chain %s exists: %v", jump.table, jump.dstChain, err)
@@ -878,6 +890,7 @@ func (proxier *Proxier) syncProxyRules() {
 			"-m", "comment", "--comment", jump.comment,
 			"-j", string(jump.dstChain),
 		)
+		//插入到已有的链
 		if _, err := proxier.iptables.EnsureRule(utiliptables.Prepend, jump.table, jump.srcChain, args...); err != nil {
 			klog.Errorf("Failed to ensure that %s chain %s jumps to %s: %v", jump.table, jump.srcChain, jump.dstChain, err)
 			return
@@ -900,6 +913,7 @@ func (proxier *Proxier) syncProxyRules() {
 	// This will be a map of chain name to chain with rules as stored in iptables-save/iptables-restore
 	existingFilterChains := make(map[utiliptables.Chain][]byte)
 	proxier.existingFilterChainsData.Reset()
+	// 将已存在的数据导入到本地buffer当中
 	err = proxier.iptables.SaveInto(utiliptables.TableFilter, proxier.existingFilterChainsData)
 	if err != nil { // if we failed to get any rules
 		klog.Errorf("Failed to execute iptables-save, syncing all rules: %v", err)
@@ -910,6 +924,7 @@ func (proxier *Proxier) syncProxyRules() {
 	// IMPORTANT: existingNATChains may share memory with proxier.iptablesData.
 	existingNATChains := make(map[utiliptables.Chain][]byte)
 	proxier.iptablesData.Reset()
+	// 将已存在的数据导入到本地buffer当中
 	err = proxier.iptables.SaveInto(utiliptables.TableNAT, proxier.iptablesData)
 	if err != nil { // if we failed to get any rules
 		klog.Errorf("Failed to execute iptables-save, syncing all rules: %v", err)
@@ -930,6 +945,7 @@ func (proxier *Proxier) syncProxyRules() {
 
 	// Make sure we keep stats for the top-level chains, if they existed
 	// (which most should have because we created them above).
+	// 检查已经创建出来的表是否已经存在
 	for _, chainName := range []utiliptables.Chain{kubeServicesChain, kubeExternalServicesChain, kubeForwardChain} {
 		if chain, ok := existingFilterChains[chainName]; ok {
 			writeBytesLine(proxier.filterChains, chain)
@@ -949,6 +965,7 @@ func (proxier *Proxier) syncProxyRules() {
 	// this so that it is easier to flush and change, for example if the mark
 	// value should ever change.
 	// NB: THIS MUST MATCH the corresponding code in the kubelet
+	// SNAT 地址伪装规则，将出来的报文的原 IP，
 	writeLine(proxier.natRules, []string{
 		"-A", string(kubePostroutingChain),
 		"-m", "mark", "!", "--mark", fmt.Sprintf("%s/%s", proxier.masqueradeMark, proxier.masqueradeMark),
@@ -1005,6 +1022,7 @@ func (proxier *Proxier) syncProxyRules() {
 	}
 
 	// Build rules for each service.
+	// 为每个 service 创建规则
 	for svcName, svc := range proxier.serviceMap {
 		svcInfo, ok := svc.(*serviceInfo)
 		if !ok {
@@ -1085,6 +1103,7 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 
 		// Capture externalIPs.
+		// 服务使用 external-ip
 		for _, externalIP := range svcInfo.ExternalIPStrings() {
 			// If the "external" IP happens to be an IP that is local to this
 			// machine, hold the local port open so no other process can open it
@@ -1128,24 +1147,22 @@ func (proxier *Proxier) syncProxyRules() {
 				)
 
 				destChain := svcXlbChain
-				// We have to SNAT packets to external IPs if externalTrafficPolicy is cluster.
+				// We have to SNAT packets to external IPs if externalTrafficPolicy is cluster
+				// and the traffic is NOT Local. Local traffic coming from Pods and Nodes will
+				// be always forwarded to the corresponding Service, so no need to SNAT
+				// If we can't differentiate the local traffic we always SNAT.
 				if !svcInfo.OnlyNodeLocalEndpoints() {
 					destChain = svcChain
-					writeLine(proxier.natRules, append(args, "-j", string(KubeMarkMasqChain))...)
+					// This masquerades off-cluster traffic to a External IP.
+					if proxier.localDetector.IsImplemented() {
+						writeLine(proxier.natRules, proxier.localDetector.JumpIfNotLocal(args, string(KubeMarkMasqChain))...)
+					} else {
+						writeLine(proxier.natRules, append(args, "-j", string(KubeMarkMasqChain))...)
+					}
 				}
+				// Sent traffic bound for external IPs to the service chain.
+				writeLine(proxier.natRules, append(args, "-j", string(destChain))...)
 
-				// Allow traffic for external IPs that does not come from a bridge (i.e. not from a container)
-				// nor from a local process to be forwarded to the service.
-				// This rule roughly translates to "all traffic from off-machine".
-				// This is imperfect in the face of network plugins that might not use a bridge, but we can revisit that later.
-				externalTrafficOnlyArgs := append(args,
-					"-m", "physdev", "!", "--physdev-is-in",
-					"-m", "addrtype", "!", "--src-type", "LOCAL")
-				writeLine(proxier.natRules, append(externalTrafficOnlyArgs, "-j", string(destChain))...)
-				dstLocalOnlyArgs := append(args, "-m", "addrtype", "--dst-type", "LOCAL")
-				// Allow traffic bound for external IPs that happen to be recognized as local IPs to stay local.
-				// This covers cases like GCE load-balancers which get added to the local routing table.
-				writeLine(proxier.natRules, append(dstLocalOnlyArgs, "-j", string(destChain))...)
 			} else {
 				// No endpoints.
 				writeLine(proxier.filterRules,
@@ -1160,6 +1177,7 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 
 		// Capture load-balancer ingress.
+		// 服务使用了 ingress
 		fwChain := svcInfo.serviceFirewallChainName
 		for _, ingress := range svcInfo.LoadBalancerIPStrings() {
 			if ingress != "" {
@@ -1242,6 +1260,7 @@ func (proxier *Proxier) syncProxyRules() {
 		// Capture nodeports.  If we had more than 2 rules it might be
 		// worthwhile to make a new per-service chain for nodeport rules, but
 		// with just 2 rules it ends up being a waste and a cognitive burden.
+		// 使用了 nodePort, 创建对应规则
 		if svcInfo.NodePort() != 0 {
 			// Hold the local port open so no other process can open it
 			// (because the socket might open but it would never work).
@@ -1376,6 +1395,7 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 
 		// Now write loadbalancing & DNAT rules.
+		// 为 endpoint 生成规则链 KUBE-SEP-XXX
 		n := len(endpointChains)
 		localEndpointChains := make([]utiliptables.Chain, 0)
 		for i, endpointChain := range endpointChains {
@@ -1495,6 +1515,7 @@ func (proxier *Proxier) syncProxyRules() {
 	}
 
 	// Delete chains no longer in use.
+	// 删除不存在的自定义链
 	for chain := range existingNATChains {
 		if !activeNATChains[chain] {
 			chainString := string(chain)
@@ -1512,6 +1533,7 @@ func (proxier *Proxier) syncProxyRules() {
 
 	// Finally, tail-call to the nodeports chain.  This needs to be after all
 	// other service portal rules.
+	// 添加 nodeport 规则
 	isIPv6 := proxier.iptables.IsIPv6()
 	for address := range nodeAddresses {
 		// TODO(thockin, m1093782566): If/when we have dual-stack support we will want to distinguish v4 from v6 zero-CIDRs.
@@ -1539,6 +1561,7 @@ func (proxier *Proxier) syncProxyRules() {
 		writeLine(proxier.natRules, args...)
 	}
 
+	// 为 KUBE-FORWARD 链添加对应的规则
 	// Drop the packets in INVALID state, which would potentially cause
 	// unexpected connection reset.
 	// https://github.com/kubernetes/kubernetes/issues/74839
@@ -1578,6 +1601,7 @@ func (proxier *Proxier) syncProxyRules() {
 	)
 
 	// Write the end-of-table markers.
+	// 结尾添加标志
 	writeLine(proxier.filterRules, "COMMIT")
 	writeLine(proxier.natRules, "COMMIT")
 
@@ -1589,6 +1613,7 @@ func (proxier *Proxier) syncProxyRules() {
 	proxier.iptablesData.Write(proxier.natChains.Bytes())
 	proxier.iptablesData.Write(proxier.natRules.Bytes())
 
+	//  iptables-restore 同步规则
 	klog.V(5).Infof("Restoring iptables rules: %s", proxier.iptablesData.Bytes())
 	err = proxier.iptables.RestoreAll(proxier.iptablesData.Bytes(), utiliptables.NoFlushTables, utiliptables.RestoreCounters)
 	if err != nil {
@@ -1707,3 +1732,4 @@ func openLocalPort(lp *utilproxy.LocalPort, isIPv6 bool) (utilproxy.Closeable, e
 	klog.V(2).Infof("Opened local port %s", lp.String())
 	return socket, nil
 }
+
