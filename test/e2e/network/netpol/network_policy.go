@@ -122,7 +122,8 @@ var _ = common.SIGDescribe("Netpol", func() {
 
 	ginkgo.Context("NetworkPolicy between server and client", func() {
 		ginkgo.BeforeEach(func() {
-			initializeResourcesByFixedNS(f)
+			_, _, _, model, k8s := getK8SModel(f)
+			initializeResourcesByFixedNS(k8s, model)
 		})
 
 		ginkgo.AfterEach(func() {
@@ -1089,6 +1090,62 @@ var _ = common.SIGDescribe("Netpol", func() {
 			ValidateOrFail(k8s, model, &TestCase{ToPort: 81, Protocol: v1.ProtocolTCP, Reachability: reachability})
 		})
 	})
+
+	ginkgo.Context("NetworkPolicy between server and client using port range", func() {
+		ginkgo.BeforeEach(func() {
+			_, _, _, model, k8s := getK8SModelForEndPort(f)
+			initializeResourcesByFixedNS(k8s, model)
+		})
+
+		ginkgo.AfterEach(func() {
+			if !useFixedNamespaces {
+				_, _, _, model, k8s := getK8SModelForEndPort(f)
+				framework.ExpectNoError(k8s.deleteNamespaces(model.NamespaceNames), "unable to clean up UDP netpol namespaces")
+			}
+		})
+
+		ginkgo.It("should enforce policy to allow ingress traffic using port range [Feature:NetworkPolicy]", func() {
+			nsX, _, _, model, k8s := getK8SModelForEndPort(f)
+			ingressRule := networkingv1.NetworkPolicyIngressRule{}
+			endPort := int32(115)
+			ingressRule.Ports = append(ingressRule.Ports, networkingv1.NetworkPolicyPort{Port: &intstr.IntOrString{Type: intstr.Int, IntVal: 111}, EndPort: &endPort})
+			policy := GenNetworkPolicyWithNameAndPodMatchLabel("allow-ingress-use-port-range", map[string]string{"pod": "a"}, SetSpecIngressRules(ingressRule))
+			CreatePolicy(k8s, policy, nsX)
+			reachability111To115 := NewReachability(model.AllPods(), true)
+			reachability111To115.ExpectAllIngress(NewPodString(nsX, "a"), true)
+
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 111, Protocol: v1.ProtocolTCP, Reachability: reachability111To115})
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 112, Protocol: v1.ProtocolTCP, Reachability: reachability111To115})
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 113, Protocol: v1.ProtocolTCP, Reachability: reachability111To115})
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 114, Protocol: v1.ProtocolTCP, Reachability: reachability111To115})
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 115, Protocol: v1.ProtocolTCP, Reachability: reachability111To115})
+
+			reachability116 := NewReachability(model.AllPods(), true)
+			reachability116.ExpectAllIngress(NewPodString(nsX, "a"), false)
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 116, Protocol: v1.ProtocolTCP, Reachability: reachability116})
+		})
+
+		ginkgo.It("should enforce policy to allow egress traffic using port range [Feature:NetworkPolicy]", func() {
+			nsX, _, _, model, k8s := getK8SModelForEndPort(f)
+			egressRule := networkingv1.NetworkPolicyEgressRule{}
+			endPort := int32(115)
+			egressRule.Ports = append(egressRule.Ports, networkingv1.NetworkPolicyPort{Port: &intstr.IntOrString{Type: intstr.Int, IntVal: 111}, EndPort: &endPort})
+			policy := GenNetworkPolicyWithNameAndPodMatchLabel("allow-egress-use-port-range", map[string]string{"pod": "a"}, SetSpecEgressRules(egressRule))
+			CreatePolicy(k8s, policy, nsX)
+			reachability111To115 := NewReachability(model.AllPods(), true)
+			reachability111To115.ExpectAllEgress(NewPodString(nsX, "a"), true)
+
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 111, Protocol: v1.ProtocolTCP, Reachability: reachability111To115})
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 112, Protocol: v1.ProtocolTCP, Reachability: reachability111To115})
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 113, Protocol: v1.ProtocolTCP, Reachability: reachability111To115})
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 114, Protocol: v1.ProtocolTCP, Reachability: reachability111To115})
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 115, Protocol: v1.ProtocolTCP, Reachability: reachability111To115})
+
+			reachability116 := NewReachability(model.AllPods(), true)
+			reachability116.ExpectAllEgress(NewPodString(nsX, "a"), false)
+			ValidateOrFail(k8s, model, &TestCase{ToPort: 116, Protocol: v1.ProtocolTCP, Reachability: reachability116})
+		})
+	})
 })
 
 var _ = common.SIGDescribe("Netpol [Feature:UDPConnectivity][LinuxOnly]", func() {
@@ -1101,7 +1158,8 @@ var _ = common.SIGDescribe("Netpol [Feature:UDPConnectivity][LinuxOnly]", func()
 
 	ginkgo.Context("NetworkPolicy between server and client using UDP", func() {
 		ginkgo.BeforeEach(func() {
-			initializeResourcesByFixedNS(f)
+			_, _, _, model, k8s := getK8SModel(f)
+			initializeResourcesByFixedNS(k8s, model)
 		})
 
 		ginkgo.AfterEach(func() {
@@ -1181,7 +1239,8 @@ var _ = common.SIGDescribe("Netpol [Feature:SCTPConnectivity][LinuxOnly][Disrupt
 	ginkgo.Context("NetworkPolicy between server and client using SCTP", func() {
 		ginkgo.BeforeEach(func() {
 			addSCTPContainers = true
-			initializeResourcesByFixedNS(f)
+			_, _, _, model, k8s := getK8SModel(f)
+			initializeResourcesByFixedNS(k8s, model)
 		})
 
 		ginkgo.AfterEach(func() {
@@ -1262,18 +1321,18 @@ func getNamespaces(rootNs string) (string, string, string, []string) {
 	return nsX, nsY, nsZ, []string{nsX, nsY, nsZ}
 }
 
-// defaultModel creates a new "model" pod system under namespaces (x,y,z) which has pods a, b, and c.  Thus resulting in the
-// truth table matrix that is identical for all tests, comprising 81 total connections between 9 pods (x/a, x/b, x/c, ..., z/c).
-func defaultModel(namespaces []string, dnsDomain string) *Model {
+// getModel creates a new "model" pod system under namespaces which has pods.Thus resulting in the
+// truth table matrix that is identical for all tests, comprising namespaces * podNames total connections between pods.
+func getModel(namespaces []string, podNames []string, ports []int32, dnsDomain string) *Model {
 	protocols := []v1.Protocol{v1.ProtocolTCP, v1.ProtocolUDP}
 	if addSCTPContainers {
 		protocols = append(protocols, v1.ProtocolSCTP)
 	}
 
 	if framework.NodeOSDistroIs("windows") {
-		return NewWindowsModel(namespaces, []string{"a", "b", "c"}, []int32{80, 81}, dnsDomain)
+		return NewWindowsModel(namespaces, podNames, ports, dnsDomain)
 	}
-	return NewModel(namespaces, []string{"a", "b", "c"}, []int32{80, 81}, protocols, dnsDomain)
+	return NewModel(namespaces, podNames, ports, protocols, dnsDomain)
 }
 
 // getK8sModel generates a network policy model using the framework's root namespace and cluster DNS domain.
@@ -1283,17 +1342,26 @@ func getK8SModel(f *framework.Framework) (string, string, string, *Model, *kubeM
 	rootNs := f.Namespace.GetName()
 	nsX, nsY, nsZ, namespaces := getNamespaces(rootNs)
 
-	model := defaultModel(namespaces, framework.TestContext.ClusterDNSDomain)
+	model := getModel(namespaces, []string{"a", "b", "c"}, []int32{80, 81}, framework.TestContext.ClusterDNSDomain)
 
+	return nsX, nsY, nsZ, model, k8s
+}
+
+// getK8SModelForEndPort generates a network policy model using the framework's root namespace and cluster DNS domain.
+// this func create model with more ports which is needed for testing networkpolicy endport feature.
+func getK8SModelForEndPort(f *framework.Framework) (string, string, string, *Model, *kubeManager) {
+	k8s := newKubeManager(f)
+	rootNs := f.Namespace.GetName()
+	nsX, nsY, nsZ, namespaces := getNamespaces(rootNs)
+	model := getModel(namespaces, []string{"a", "b", "c"}, []int32{111, 112, 113, 114, 115}, framework.TestContext.ClusterDNSDomain)
 	return nsX, nsY, nsZ, model, k8s
 }
 
 // initializeResourcesByFixedNS uses the e2e framework to create all necessary namespace resources, cleaning up
 // network policies from the namespace if useFixedNamespace is set true, avoiding policies overlap of new tests.
-func initializeResourcesByFixedNS(f *framework.Framework) {
+func initializeResourcesByFixedNS(k8s *kubeManager, model *Model) {
 	if useFixedNamespaces {
-		_ = initializeResources(f)
-		_, _, _, model, k8s := getK8SModel(f)
+		_ = initializeResources(k8s, model)
 		framework.ExpectNoError(k8s.cleanNetworkPolicies(model.NamespaceNames), "unable to clean network policies")
 		err := wait.Poll(waitInterval, waitTimeout, func() (done bool, err error) {
 			for _, ns := range model.NamespaceNames {
@@ -1308,15 +1376,14 @@ func initializeResourcesByFixedNS(f *framework.Framework) {
 		framework.ExpectNoError(err, "unable to wait for network policy deletion")
 	} else {
 		framework.Logf("Using %v as the default dns domain for this cluster... ", framework.TestContext.ClusterDNSDomain)
-		framework.ExpectNoError(initializeResources(f), "unable to initialize resources")
+		framework.ExpectNoError(initializeResources(k8s, model), "unable to initialize resources")
 	}
 }
 
 // initializeResources uses the e2e framework to create all necessary namespace resources, based on the network policy
 // model derived from the framework.  It then waits for the resources described by the model to be up and running
 // (i.e. all pods are ready and running in their namespaces).
-func initializeResources(f *framework.Framework) error {
-	_, _, _, model, k8s := getK8SModel(f)
+func initializeResources(k8s *kubeManager, model *Model) error {
 
 	framework.Logf("initializing cluster: ensuring namespaces, deployments, and pods exist and are ready")
 
