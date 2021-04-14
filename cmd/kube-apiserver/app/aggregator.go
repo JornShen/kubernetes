@@ -126,6 +126,7 @@ func createAggregatorConfig(
 }
 
 func createAggregatorServer(aggregatorConfig *aggregatorapiserver.Config, delegateAPIServer genericapiserver.DelegationTarget, apiExtensionInformers apiextensionsinformers.SharedInformerFactory) (*aggregatorapiserver.APIAggregator, error) {
+	// AggregatorServer 主要是自定义的聚合控制器的，使 CRD 能够自动注册到集群中
 	aggregatorServer, err := aggregatorConfig.Complete().NewWithDelegate(delegateAPIServer)
 	if err != nil {
 		return nil, err
@@ -136,12 +137,15 @@ func createAggregatorServer(aggregatorConfig *aggregatorapiserver.Config, delega
 	if err != nil {
 		return nil, err
 	}
+	// autoRegistrationController 负责将 CRD 对应的 APIServices 自动注册到 apiserver 中
 	autoRegistrationController := autoregister.NewAutoRegisterController(aggregatorServer.APIRegistrationInformers.Apiregistration().V1().APIServices(), apiRegistrationClient)
 	apiServices := apiServicesToRegister(delegateAPIServer, autoRegistrationController)
+	// crdRegistrationController 负责注册 CRD
 	crdRegistrationController := crdregistration.NewCRDRegistrationController(
 		apiExtensionInformers.Apiextensions().V1().CustomResourceDefinitions(),
 		autoRegistrationController)
 
+	// 加入到 PostStartHook 当中
 	err = aggregatorServer.GenericAPIServer.AddPostStartHook("kube-apiserver-autoregistration", func(context genericapiserver.PostStartHookContext) error {
 		go crdRegistrationController.Run(5, context.StopCh)
 		go func() {
@@ -325,3 +329,4 @@ func apiServicesToRegister(delegateAPIServer genericapiserver.DelegationTarget, 
 
 	return apiServices
 }
+

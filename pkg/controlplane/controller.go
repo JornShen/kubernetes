@@ -86,11 +86,12 @@ type Controller struct {
 
 // NewBootstrapController returns a controller for watching the core capabilities of the master
 func (c *completedConfig) NewBootstrapController(legacyRESTStorage corerest.LegacyRESTStorage, serviceClient corev1client.ServicesGetter, nsClient corev1client.NamespacesGetter, eventClient corev1client.EventsGetter, readyzClient rest.Interface) *Controller {
+	// 获取 PublicServicePort
 	_, publicServicePort, err := c.GenericConfig.SecureServing.HostPort()
 	if err != nil {
 		klog.Fatalf("failed to get listener address: %v", err)
 	}
-
+	// 指定需要创建的 kube-system 和 kube-public 和 nodelease
 	systemNamespaces := []string{metav1.NamespaceSystem, metav1.NamespacePublic, corev1.NamespaceNodeLease}
 
 	return &Controller{
@@ -142,6 +143,10 @@ func (c *Controller) PreShutdownHook() error {
 // Start begins the core controller loops that must exist for bootstrapping
 // a cluster.
 func (c *Controller) Start() {
+	// 修复 ClusterIP、
+	// 修复 NodePort、
+	// 更新 kubernetes service、
+	// 创建系统所需要的名字空间（default、kube-system、kube-public、kube-nodelease）
 	if c.runner != nil {
 		return
 	}
@@ -152,10 +157,12 @@ func (c *Controller) Start() {
 		klog.Errorf("Unable to remove old endpoints from kubernetes service: %v", err)
 	}
 
+	// 初始化 repairClusterIPs 和 repairNodePorts 对象
 	repairClusterIPs := servicecontroller.NewRepair(c.ServiceClusterIPInterval, c.ServiceClient, c.EventClient, &c.ServiceClusterIPRange, c.ServiceClusterIPRegistry, &c.SecondaryServiceClusterIPRange, c.SecondaryServiceClusterIPRegistry)
 	repairNodePorts := portallocatorcontroller.NewRepair(c.ServiceNodePortInterval, c.ServiceClient, c.EventClient, c.ServiceNodePortRange, c.ServiceNodePortRegistry)
 
 	// run all of the controllers once prior to returning from Start.
+	// 首先运行一次 epairClusterIPs 和 repairNodePorts，即进行初始化
 	if err := repairClusterIPs.RunOnce(); err != nil {
 		// If we fail to repair cluster IPs apiserver is useless. We should restart and retry.
 		klog.Fatalf("Unable to perform initial IP allocation check: %v", err)
@@ -165,6 +172,7 @@ func (c *Controller) Start() {
 		klog.Fatalf("Unable to perform initial service nodePort check: %v", err)
 	}
 
+	// 定期执行 bootstrap controller 主要的四个功能
 	c.runner = async.NewRunner(c.RunKubernetesNamespaces, c.RunKubernetesService, repairClusterIPs.RunUntil, repairNodePorts.RunUntil)
 	c.runner.Start()
 }
@@ -197,6 +205,7 @@ func (c *Controller) Stop() {
 // RunKubernetesNamespaces periodically makes sure that all internal namespaces exist
 func (c *Controller) RunKubernetesNamespaces(ch chan struct{}) {
 	wait.Until(func() {
+		// 创建命名空间
 		// Loop the system namespace list, and create them if they do not exist
 		for _, ns := range c.SystemNamespaces {
 			if err := createNamespaceIfNeeded(c.NamespaceClient, ns); err != nil {
@@ -209,12 +218,14 @@ func (c *Controller) RunKubernetesNamespaces(ch chan struct{}) {
 // RunKubernetesService periodically updates the kubernetes service
 func (c *Controller) RunKubernetesService(ch chan struct{}) {
 	// wait until process is ready
+	// 直到进程处于 ready 状态
 	wait.PollImmediateUntil(100*time.Millisecond, func() (bool, error) {
 		var code int
 		c.readyzClient.Get().AbsPath("/readyz").Do(context.TODO()).StatusCode(&code)
 		return code == http.StatusOK, nil
 	}, ch)
 
+	// 更新 service 的状态
 	wait.NonSlidingUntil(func() {
 		// Service definition is not reconciled after first
 		// run, ports and type will be corrected only during
@@ -227,6 +238,7 @@ func (c *Controller) RunKubernetesService(ch chan struct{}) {
 
 // UpdateKubernetesService attempts to update the default Kube service.
 func (c *Controller) UpdateKubernetesService(reconcile bool) error {
+	// 创建和更新 service 和 endpoint
 	// Update service & endpoint records.
 	// TODO: when it becomes possible to change this stuff,
 	// stop polling and start watching.
@@ -316,3 +328,4 @@ func (c *Controller) CreateOrUpdateMasterServiceIfNeeded(serviceName string, ser
 	}
 	return err
 }
+

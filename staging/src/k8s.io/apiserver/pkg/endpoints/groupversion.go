@@ -112,10 +112,11 @@ func (g *APIGroupVersion) InstallREST(container *restful.Container) ([]*storagev
 		prefix:            prefix,
 		minRequestTimeout: g.MinRequestTimeout,
 	}
-
+	// Install
 	apiResources, resourceInfos, ws, registrationErrors := installer.Install()
 	versionDiscoveryHandler := discovery.NewAPIVersionHandler(g.Serializer, g.GroupVersion, staticLister{apiResources})
 	versionDiscoveryHandler.AddToWebService(ws)
+	// ws 注册到 container 中
 	container.Add(ws)
 	return removeNonPersistedResources(resourceInfos), utilerrors.NewAggregate(registrationErrors)
 }
@@ -143,3 +144,4 @@ func (s staticLister) ListAPIResources() []metav1.APIResource {
 }
 
 var _ discovery.APIResourceLister = &staticLister{}
+

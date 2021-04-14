@@ -127,6 +127,12 @@ func (c *Repair) RunOnce() error {
 
 // runOnce verifies the state of the cluster IP allocations and returns an error if an unrecoverable problem occurs.
 func (c *Repair) runOnce() error {
+	/*
+	保证集群中所有的 ClusterIP 都是唯一分配的；
+	保证分配的 ClusterIP 不会超出指定范围；
+	确保已经分配给 service 但是因为 crash 等其他原因没有正确创建 ClusterIP；
+	自动将旧版本的 Kubernetes services 迁移到 ipallocator 原子性模型；
+	*/
 	// TODO: (per smarterclayton) if Get() or ListServices() is a weak consistency read,
 	// or if they are executed against different leaders,
 	// the ordering guarantee required to ensure no IP is allocated twice is violated.
@@ -313,3 +319,4 @@ func (c *Repair) checkLeaked(leaks map[string]int, stored ipallocator.Interface,
 		}
 	})
 }
+

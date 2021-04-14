@@ -50,6 +50,7 @@ var namespaceGVK = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Name
 
 func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Interface, includeName bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
+		// 数据写入到后端存储的方法
 		// For performance tracking purposes.
 		trace := utiltrace.New("Create", traceFields(req)...)
 		defer trace.LogIfLong(500 * time.Millisecond)
@@ -86,12 +87,14 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 		}
 
 		gv := scope.Kind.GroupVersion()
+		// 得到合适的SerializerInfo
 		s, err := negotiation.NegotiateInputSerializer(req, false, scope.Serializer)
 		if err != nil {
 			scope.err(err, w, req)
 			return
 		}
 
+		// 找到合适的 decoder
 		decoder := scope.Serializer.DecoderToVersion(s.Serializer, scope.HubGroupVersion)
 
 		body, err := limitedReadBody(req, scope.MaxRequestBodyBytes)
@@ -117,6 +120,7 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 		defaultGVK := scope.Kind
 		original := r.New()
 		trace.Step("About to convert to expected version")
+		// decode 解码
 		obj, gvk, err := decoder.Decode(body, &defaultGVK, original)
 		if err != nil {
 			err = transformDecodeError(scope.Typer, err, original, gvk, body)
@@ -146,6 +150,7 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 		userInfo, _ := request.UserFrom(ctx)
 
 		trace.Step("About to store object in database")
+		// 执行 admit 操作，即执行 kube-apiserver 启动时加载的 admission-plugins，
 		admissionAttributes := admission.NewAttributesRecord(obj, nil, scope.Kind, namespace, name, scope.Resource, scope.Subresource, admission.Create, options, dryrun.IsDryRun(options.DryRun), userInfo)
 		requestFunc := func() (runtime.Object, error) {
 			return r.Create(
@@ -158,6 +163,7 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 		}
 		// Dedup owner references before updating managed fields
 		dedupOwnerReferencesAndAddWarning(obj, req.Context(), false)
+		// 执行 create 操作
 		result, err := finisher.FinishRequest(ctx, func() (runtime.Object, error) {
 			if scope.FieldManager != nil {
 				liveObj, err := scope.Creater.New(scope.Kind)
@@ -247,3 +253,4 @@ func prefixFromUserAgent(u string) string {
 	}
 	return buf.String()
 }
+

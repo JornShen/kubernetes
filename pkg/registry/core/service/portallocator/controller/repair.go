@@ -93,6 +93,8 @@ func (c *Repair) runOnce() error {
 
 	// If etcd server is not running we should wait for some time and fail only then. This is particularly
 	// important when we start apiserver and etcd at the same time.
+
+	// 纠正 service 中 nodePort 的信息，保证所有的 ports 都基于 cluster 创建的
 	var snapshot *api.RangeAllocation
 
 	err := wait.PollImmediate(time.Second, 10*time.Second, func() (bool, error) {
@@ -238,3 +240,4 @@ func collectServiceNodePorts(service *corev1.Service) []int {
 
 	return servicePorts
 }
+

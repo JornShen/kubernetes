@@ -70,7 +70,7 @@ type REST struct {
 
 // NewStorage returns a RESTStorage object that will work against pods.
 func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGetter, proxyTransport http.RoundTripper, podDisruptionBudgetClient policyclient.PodDisruptionBudgetsGetter) (PodStorage, error) {
-
+	// 为 pod 生成 storage 的方法,
 	store := &genericregistry.Store{
 		NewFunc:                  func() runtime.Object { return &api.Pod{} },
 		NewListFunc:              func() runtime.Object { return &api.PodList{} },
@@ -91,6 +91,7 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGet
 		TriggerFunc: map[string]storage.IndexerFunc{"spec.nodeName": registrypod.NodeNameTriggerFunc},
 		Indexers:    registrypod.Indexers(),
 	}
+	// 调用 store.CompleteWithOptions
 	if err := store.CompleteWithOptions(options); err != nil {
 		return PodStorage{}, err
 	}
@@ -102,6 +103,7 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGet
 	ephemeralContainersStore.UpdateStrategy = registrypod.EphemeralContainersStrategy
 
 	bindingREST := &BindingREST{store: store}
+	// PodStorage 对象
 	return PodStorage{
 		Pod:                 &REST{store, proxyTransport},
 		Binding:             &BindingREST{store: store},
@@ -391,3 +393,4 @@ func ephemeralContainersInPod(pod *api.Pod) *api.EphemeralContainers {
 		EphemeralContainers: ephemeralContainers,
 	}
 }
+

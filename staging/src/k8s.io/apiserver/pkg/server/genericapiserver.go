@@ -342,11 +342,13 @@ func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 	}()
 
 	// close socket after delayed stopCh
+	// 调用 s.NonBlockingRun 完成启动流程
 	stoppedCh, err := s.NonBlockingRun(delayedStopCh)
 	if err != nil {
 		return err
 	}
 
+	// 当收到退出信号后完成一些收尾工作
 	<-stopCh
 
 	// run shutdown hooks directly. This includes deregistering from the kubernetes endpoint in case of kube-apiserver.
@@ -376,12 +378,14 @@ func (s preparedGenericAPIServer) NonBlockingRun(stopCh <-chan struct{}) (<-chan
 
 	// Start the audit backend before any request comes in. This means we must call Backend.Run
 	// before http server start serving. Otherwise the Backend.ProcessEvents call might block.
+	// 1、判断是否要启动审计日志
 	if s.AuditBackend != nil {
 		if err := s.AuditBackend.Run(auditStopCh); err != nil {
 			return nil, fmt.Errorf("failed to run the audit backend: %v", err)
 		}
 	}
 
+	// 启动 https server
 	// Use an internal stop channel to allow cleanup of the listeners on error.
 	internalStopCh := make(chan struct{})
 	var stoppedCh <-chan struct{}
@@ -408,8 +412,10 @@ func (s preparedGenericAPIServer) NonBlockingRun(stopCh <-chan struct{}) (<-chan
 		close(auditStopCh)
 	}()
 
+	// 执行 postStartHook
 	s.RunPostStartHooks(stopCh)
 
+	// 向 systemd 发送 ready 信号
 	if _, err := systemd.SdNotify(true, "READY=1\n"); err != nil {
 		klog.Errorf("Unable to send systemd daemon successful start message: %v\n", err)
 	}
@@ -442,6 +448,7 @@ func (s *GenericAPIServer) installAPIResources(apiPrefix string, apiGroupInfo *A
 
 		apiGroupVersion.MaxRequestBodyBytes = s.maxRequestBodyBytes
 
+		// 安装 container
 		r, err := apiGroupVersion.InstallREST(s.Handler.GoRestfulContainer)
 		if err != nil {
 			return fmt.Errorf("unable to setup API %v: %v", apiGroupInfo, err)
@@ -470,6 +477,7 @@ func (s *GenericAPIServer) InstallLegacyAPIGroup(apiPrefix string, apiGroupInfo 
 		return fmt.Errorf("unable to get openapi models: %v", err)
 	}
 
+	// installAPIResources 注册
 	if err := s.installAPIResources(apiPrefix, apiGroupInfo, openAPIModels); err != nil {
 		return err
 	}
@@ -637,3 +645,4 @@ func getResourceNamesForGroup(apiPrefix string, apiGroupInfo *APIGroupInfo, path
 
 	return resourceNames, nil
 }
+
