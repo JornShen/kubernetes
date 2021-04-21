@@ -107,6 +107,7 @@ func deletePodHandler(c clientset.Interface, emitEventFunc func(types.Namespaced
 		if emitEventFunc != nil {
 			emitEventFunc(args.NamespacedName)
 		}
+		// 执行驱逐操作
 		var err error
 		for i := 0; i < retries; i++ {
 			err = c.CoreV1().Pods(ns).Delete(context.TODO(), name, metav1.DeleteOptions{})
@@ -184,6 +185,10 @@ func NewNoExecuteTaintManager(c clientset.Interface, getPod GetPodFunc, getNode 
 
 // Run starts NoExecuteTaintManager which will run in loop until `stopCh` is closed.
 func (tc *NoExecuteTaintManager) Run(stopCh <-chan struct{}) {
+	// 当该 node 上的 pod 不容忍 node taint 时将 pod 进行驱逐，
+	// 若不开启该功能则已调度到该 node 上的 pod 会继续存在，
+	// 新创建的 pod 需要容忍 node 的 taint 才会调度至该 node 上
+
 	klog.V(0).InfoS("Starting NoExecuteTaintManager")
 
 	for i := 0; i < UpdateWorkerSize; i++ {
@@ -205,6 +210,7 @@ func (tc *NoExecuteTaintManager) Run(stopCh <-chan struct{}) {
 			case <-stopCh:
 				tc.nodeUpdateQueue.Done(item)
 				return
+			// 发送到 nodeUpdateChannels 当中
 			case tc.nodeUpdateChannels[hash] <- nodeUpdate:
 				// tc.nodeUpdateQueue.Done is called by the nodeUpdateChannels worker
 			}
@@ -227,6 +233,7 @@ func (tc *NoExecuteTaintManager) Run(stopCh <-chan struct{}) {
 			case <-stopCh:
 				tc.podUpdateQueue.Done(item)
 				return
+			// 发送到 podUpdateChannels
 			case tc.podUpdateChannels[hash] <- podUpdate:
 				// tc.podUpdateQueue.Done is called by the podUpdateChannels worker
 			}
@@ -242,6 +249,7 @@ func (tc *NoExecuteTaintManager) Run(stopCh <-chan struct{}) {
 }
 
 func (tc *NoExecuteTaintManager) worker(worker int, done func(), stopCh <-chan struct{}) {
+	// 处理 nodeUpdateChannels 和 podUpdateChannels 中的数据
 	defer done()
 
 	// When processing events we want to prioritize Node updates over Pod updates,
@@ -257,6 +265,7 @@ func (tc *NoExecuteTaintManager) worker(worker int, done func(), stopCh <-chan s
 			tc.nodeUpdateQueue.Done(nodeUpdate)
 		case podUpdate := <-tc.podUpdateChannels[worker]:
 			// If we found a Pod update we need to empty Node queue first.
+			// 优先处理 nodeUpdateChannels
 		priority:
 			for {
 				select {
@@ -355,20 +364,24 @@ func (tc *NoExecuteTaintManager) processPodOnNode(
 		tc.taintEvictionQueue.AddWork(NewWorkArgs(podNamespacedName.Name, podNamespacedName.Namespace), time.Now(), time.Now())
 		return
 	}
+	// 获取容忍时间
 	minTolerationTime := getMinTolerationTime(usedTolerations)
 	// getMinTolerationTime returns negative value to denote infinite toleration.
 	if minTolerationTime < 0 {
+		// 会一种容忍，直接返回
 		klog.V(4).InfoS("Current tolerations for pod tolerate forever, cancelling any scheduled deletion", "pod", podNamespacedName.String())
 		tc.cancelWorkWithEvent(podNamespacedName)
 		return
 	}
 
+	// 若存在最小容忍时间则将其加入到延时队列中
 	startTime := now
 	triggerTime := startTime.Add(minTolerationTime)
 	scheduledEviction := tc.taintEvictionQueue.GetWorkerUnsafe(podNamespacedName.String())
 	if scheduledEviction != nil {
 		startTime = scheduledEviction.CreatedAt
 		if startTime.Add(minTolerationTime).Before(triggerTime) {
+			// 小于时延，返回
 			return
 		}
 		tc.cancelWorkWithEvent(podNamespacedName)
@@ -433,6 +446,7 @@ func (tc *NoExecuteTaintManager) handleNodeUpdate(nodeUpdate nodeUpdateItem) {
 
 	// Create or Update
 	klog.V(4).InfoS("Noticed node update", "node", nodeUpdate)
+	// 获取 node 的 taints
 	taints := getNoExecuteTaints(node.Spec.Taints)
 	func() {
 		tc.taintedNodesLock.Lock()
@@ -441,6 +455,7 @@ func (tc *NoExecuteTaintManager) handleNodeUpdate(nodeUpdate nodeUpdateItem) {
 		if len(taints) == 0 {
 			delete(tc.taintedNodes, node.Name)
 		} else {
+			// 写入本地缓存当中，在 handlePodUpdate 使用
 			tc.taintedNodes[node.Name] = taints
 		}
 	}()
@@ -448,6 +463,7 @@ func (tc *NoExecuteTaintManager) handleNodeUpdate(nodeUpdate nodeUpdateItem) {
 	// This is critical that we update tc.taintedNodes before we call getPodsAssignedToNode:
 	// getPodsAssignedToNode can be delayed as long as all future updates to pods will call
 	// tc.PodUpdated which will use tc.taintedNodes to potentially delete delayed pods.
+	// 获取 node 上的所有 pod
 	pods, err := tc.getPodsAssignedToNode(node.Name)
 	if err != nil {
 		klog.ErrorS(err, "Failed to get pods assigned to node", "node", node.Name)
@@ -457,6 +473,7 @@ func (tc *NoExecuteTaintManager) handleNodeUpdate(nodeUpdate nodeUpdateItem) {
 		return
 	}
 	// Short circuit, to make this controller a bit faster.
+	// 若不存在 taints，则取消所有的驱逐操作
 	if len(taints) == 0 {
 		klog.V(4).InfoS("All taints were removed from the node. Cancelling all evictions...", "node", node.Name)
 		for i := range pods {
@@ -468,6 +485,7 @@ func (tc *NoExecuteTaintManager) handleNodeUpdate(nodeUpdate nodeUpdateItem) {
 	now := time.Now()
 	for _, pod := range pods {
 		podNamespacedName := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
+		// 检查pod是否被驱逐
 		tc.processPodOnNode(podNamespacedName, node.Name, pod.Spec.Tolerations, taints, now)
 	}
 }

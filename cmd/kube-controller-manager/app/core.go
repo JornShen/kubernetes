@@ -192,7 +192,9 @@ func startNodeIpamController(ctx ControllerContext) (http.Handler, bool, error) 
 	return nil, true, nil
 }
 
+// 启动 NodeLifecycleController 入口
 func startNodeLifecycleController(ctx ControllerContext) (http.Handler, bool, error) {
+	// 初始化 controller，主要监听四种资源 lease、pods、nodes、daemonSets
 	lifecycleController, err := lifecyclecontroller.NewNodeLifecycleController(
 		ctx.InformerFactory.Coordination().V1().Leases(),
 		ctx.InformerFactory.Core().V1().Pods(),

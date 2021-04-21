@@ -269,11 +269,15 @@ type Controller struct {
 	// to avoid the problem with time skew across the cluster.
 	now func() metav1.Time
 
+	// zone 下 node 驱逐速率
 	enterPartialDisruptionFunc func(nodeNum int) float32
 	enterFullDisruptionFunc    func(nodeNum int) float32
-	computeZoneStateFunc       func(nodeConditions []*v1.NodeCondition) (int, ZoneState)
+	// 计算 zone 的状态
+	computeZoneStateFunc func(nodeConditions []*v1.NodeCondition) (int, ZoneState)
 
+	// 用来记录NodeController observed节点的集合
 	knownNodeSet map[string]*v1.Node
+	// 记录 node 最近一次状态的集合
 	// per Node map storing last observed health together with a local time when it was observed.
 	nodeHealthMap *nodeHealthMap
 
@@ -282,8 +286,10 @@ type Controller struct {
 	evictorLock     sync.Mutex
 	nodeEvictionMap *nodeEvictionMap
 	// workers that evicts pods from unresponsive nodes.
+	// 需要驱逐节点上 pod 的 node 队列
 	zonePodEvictor map[string]*scheduler.RateLimitedTimedQueue
 	// workers that are responsible for tainting nodes.
+	// 需要打 taint 标签的 node 队列
 	zoneNoExecuteTainter map[string]*scheduler.RateLimitedTimedQueue
 
 	nodesToRetry sync.Map
@@ -334,6 +340,7 @@ type Controller struct {
 	//    value takes longer for user to see up-to-date node health.
 	nodeMonitorGracePeriod time.Duration
 
+	// kube-controller-manager 启动时指定的几个参数
 	podEvictionTimeout          time.Duration
 	evictionLimiterQPS          float32
 	secondaryEvictionLimiterQPS float32
@@ -384,6 +391,7 @@ func NewNodeLifecycleController(
 		ratelimiter.RegisterMetricAndTrackRateLimiterUsage("node_lifecycle_controller", kubeClient.CoreV1().RESTClient().GetRateLimiter())
 	}
 
+	// 初始化 controller
 	nc := &Controller{
 		kubeClient:                  kubeClient,
 		now:                         metav1.Now,
@@ -408,10 +416,12 @@ func NewNodeLifecycleController(
 		podUpdateQueue:              workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "node_lifecycle_controller_pods"),
 	}
 
+	// 注册计算 node 驱逐速率以及 zone 状态的方法
 	nc.enterPartialDisruptionFunc = nc.ReducedQPSFunc
 	nc.enterFullDisruptionFunc = nc.HealthyQPSFunc
 	nc.computeZoneStateFunc = nc.ComputeZoneState
 
+	// 为 podInformer 注册 EventHandler，监听到的对象会被放到 nc.taintManager.PodUpdated 中
 	podInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			pod := obj.(*v1.Pod)
@@ -481,6 +491,8 @@ func NewNodeLifecycleController(
 	}
 	nc.podLister = podInformer.Lister()
 
+	// 初始化 TaintManager，为 nodeInformer 注册 EventHandler
+	// 监听到的对象会被放到 nc.taintManager.NodeUpdated 中
 	if nc.runTaintManager {
 		podGetter := func(name, namespace string) (*v1.Pod, error) { return nc.podLister.Pods(namespace).Get(name) }
 		nodeLister := nodeInformer.Lister()
@@ -503,6 +515,7 @@ func NewNodeLifecycleController(
 	}
 
 	klog.Infof("Controller will reconcile labels.")
+	// 为 NodeLifecycleController 注册 nodeInformer
 	nodeInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: nodeutil.CreateAddNodeHandler(func(node *v1.Node) error {
 			nc.nodeUpdateQueue.Add(node.Name)
@@ -534,6 +547,7 @@ func NewNodeLifecycleController(
 
 // Run starts an asynchronous loop that monitors the status of cluster nodes.
 func (nc *Controller) Run(stopCh <-chan struct{}) {
+	// 启动流程
 	defer utilruntime.HandleCrash()
 
 	klog.Infof("Starting node controller")
@@ -543,6 +557,7 @@ func (nc *Controller) Run(stopCh <-chan struct{}) {
 		return
 	}
 
+	// 启动 taintmanager
 	if nc.runTaintManager {
 		go nc.taintManager.Run(stopCh)
 	}
@@ -586,6 +601,7 @@ func (nc *Controller) Run(stopCh <-chan struct{}) {
 }
 
 func (nc *Controller) doNodeProcessingPassWorker() {
+	// 处理 nodeUpdateQueue 中的 node，为其添加合适的 NoSchedule taint 以及 label
 	for {
 		obj, shutdown := nc.nodeUpdateQueue.Get()
 		// "nodeUpdateQueue" will be shutdown when "stopCh" closed;
@@ -594,12 +610,14 @@ func (nc *Controller) doNodeProcessingPassWorker() {
 			return
 		}
 		nodeName := obj.(string)
+		// 根据 node condition 以及 node 是否调度为 node 添加对应的 NoSchedule taint 标签
 		if err := nc.doNoScheduleTaintingPass(nodeName); err != nil {
 			klog.Errorf("Failed to taint NoSchedule on node <%s>, requeue it: %v", nodeName, err)
 			// TODO(k82cn): Add nodeName back to the queue
 		}
 		// TODO: re-evaluate whether there are any labels that need to be
 		// reconcile in 1.19. Remove this function if it's no longer necessary.
+		// 为 node 添加默认的label
 		if err := nc.reconcileNodeLabels(nodeName); err != nil {
 			klog.Errorf("Failed to reconcile labels for node <%s>, requeue it: %v", nodeName, err)
 			// TODO(yujuhong): Add nodeName back to the queue
@@ -631,6 +649,7 @@ func (nc *Controller) doNoScheduleTaintingPass(nodeName string) error {
 		}
 	}
 	if node.Spec.Unschedulable {
+		// 节点处于 Unschedulable 状态，也添加标签
 		// If unschedulable, append related taint.
 		taints = append(taints, v1.Taint{
 			Key:    v1.TaintNodeUnschedulable,
@@ -657,6 +676,7 @@ func (nc *Controller) doNoScheduleTaintingPass(nodeName string) error {
 	if len(taintsToAdd) == 0 && len(taintsToDel) == 0 {
 		return nil
 	}
+	// 添加 taint 和 删除 taint
 	if !nodeutil.SwapNodeControllerTaint(nc.kubeClient, taintsToAdd, taintsToDel, node) {
 		return fmt.Errorf("failed to swap taints of node %+v", node)
 	}
@@ -666,9 +686,12 @@ func (nc *Controller) doNoScheduleTaintingPass(nodeName string) error {
 func (nc *Controller) doNoExecuteTaintingPass() {
 	nc.evictorLock.Lock()
 	defer nc.evictorLock.Unlock()
+	// 处理zoneNoExecuteTainter队列中 node
 	for k := range nc.zoneNoExecuteTainter {
+		// 根据 node 的 NodeReadyCondition 添加或移除对应的 taint
 		// Function should return 'false' and a time after which it should be retried, or 'true' if it shouldn't (it succeeded).
 		nc.zoneNoExecuteTainter[k].Try(func(value scheduler.TimedValue) (bool, time.Duration) {
+			// 获取 node 对象
 			node, err := nc.nodeLister.Get(value.Value)
 			if apierrors.IsNotFound(err) {
 				klog.Warningf("Node %v no longer present in nodeLister!", value.Value)
@@ -678,10 +701,12 @@ func (nc *Controller) doNoExecuteTaintingPass() {
 				// retry in 50 millisecond
 				return false, 50 * time.Millisecond
 			}
+			// 获取 node 的 NodeReadyCondition
 			_, condition := nodeutil.GetNodeCondition(&node.Status, v1.NodeReady)
 			// Because we want to mimic NodeStatus.Condition["Ready"] we make "unreachable" and "not ready" taints mutually exclusive.
 			taintToAdd := v1.Taint{}
 			oppositeTaint := v1.Taint{}
+			// 判断 Condition 状态，并为其添加对应的 taint
 			switch condition.Status {
 			case v1.ConditionFalse:
 				taintToAdd = *NotReadyTaintTemplate
@@ -694,7 +719,7 @@ func (nc *Controller) doNoExecuteTaintingPass() {
 				klog.V(4).Infof("Node %v was in a taint queue, but it's ready now. Ignoring taint request.", value.Value)
 				return true, 0
 			}
-
+			// 更新 node 的 taint
 			result := nodeutil.SwapNodeControllerTaint(nc.kubeClient, []*v1.Taint{&taintToAdd}, []*v1.Taint{&oppositeTaint}, node)
 			if result {
 				//count the evictionsNumber
@@ -711,6 +736,9 @@ func (nc *Controller) doEvictionPass() {
 	nc.evictorLock.Lock()
 	defer nc.evictorLock.Unlock()
 	for k := range nc.zonePodEvictor {
+
+		// 处理 zonePodEvictor 队列，将 node 上的 pod 进行驱逐
+
 		// Function should return 'false' and a time after which it should be retried, or 'true' if it shouldn't (it succeeded).
 		nc.zonePodEvictor[k].Try(func(value scheduler.TimedValue) (bool, time.Duration) {
 			node, err := nc.nodeLister.Get(value.Value)
@@ -756,16 +784,24 @@ func (nc *Controller) doEvictionPass() {
 func (nc *Controller) monitorNodeHealth() error {
 	// We are listing nodes from local cache as we can tolerate some small delays
 	// comparing to state from etcd and there is eventual consistency anyway.
+
+	// 持续监控 node 的状态，当 node 处于异常状态时更新 node 的 taint 以及 node 上 pod 的状态或者直接驱逐 node 上的 pod，
+	// 此外还会为集群下的所有 node 划分 zoneStates 并为每个 zoneStates 设置对应的驱逐速率；
+
+	// 从 nodeLister 中获取所有的 node
 	nodes, err := nc.nodeLister.List(labels.Everything())
 	if err != nil {
 		return err
 	}
+	// 根据 controller knownNodeSet 中的记录将 node 分为三类
 	added, deleted, newZoneRepresentatives := nc.classifyNodes(nodes)
 
+	// 为没有 zone 的 node 添加对应的 zone
 	for i := range newZoneRepresentatives {
 		nc.addPodEvictorForNewZone(newZoneRepresentatives[i])
 	}
 
+	// 将新增加的 node 添加到 knownNodeSet 中并且对 node 进行初始化
 	for i := range added {
 		klog.V(1).Infof("Controller observed a new Node: %#v", added[i].Name)
 		nodeutil.RecordNodeEvent(nc.recorder, added[i].Name, string(added[i].UID), v1.EventTypeNormal, "RegisteredNode", fmt.Sprintf("Registered Node %v in Controller", added[i].Name))
@@ -778,6 +814,7 @@ func (nc *Controller) monitorNodeHealth() error {
 		}
 	}
 
+	// 将 deleted 列表中的 node 从 knownNodeSet 中删除
 	for i := range deleted {
 		klog.V(1).Infof("Controller observed a Node deletion: %v", deleted[i].Name)
 		nodeutil.RecordNodeEvent(nc.recorder, deleted[i].Name, string(deleted[i].UID), v1.EventTypeNormal, "RemovingNode", fmt.Sprintf("Removing Node %v from Controller", deleted[i].Name))
@@ -791,6 +828,7 @@ func (nc *Controller) monitorNodeHealth() error {
 		var currentReadyCondition *v1.NodeCondition
 		node := nodes[i].DeepCopy()
 		if err := wait.PollImmediate(retrySleepTime, retrySleepTime*scheduler.NodeHealthUpdateRetry, func() (bool, error) {
+			// 6、获取 node 的 gracePeriod, observedReadyCondition, currentReadyConditio
 			gracePeriod, observedReadyCondition, currentReadyCondition, err = nc.tryUpdateNodeHealth(node)
 			if err == nil {
 				return true, nil
@@ -808,11 +846,13 @@ func (nc *Controller) monitorNodeHealth() error {
 			continue
 		}
 
+		// 若 node 没有被排除则加入到 zoneToNodeConditions 列表中
 		// Some nodes may be excluded from disruption checking
 		if !isNodeExcludedFromDisruptionChecks(node) {
 			zoneToNodeConditions[utilnode.GetZoneKey(node)] = append(zoneToNodeConditions[utilnode.GetZoneKey(node)], currentReadyCondition)
 		}
 
+		// 根据 observedReadyCondition 为 node 添加不同的 taint
 		if currentReadyCondition != nil {
 			pods, err := nc.getPodsAssignedToNode(node.Name)
 			if err != nil {
@@ -849,6 +889,8 @@ func (nc *Controller) monitorNodeHealth() error {
 		}
 		nc.nodesToRetry.Delete(node.Name)
 	}
+
+	// 当集群中不同 zone 下出现多个 unhealthy node 时会为 zone 设置不同的驱逐速率
 	nc.handleDisruption(zoneToNodeConditions, nodes)
 
 	return nil
@@ -955,6 +997,8 @@ func isNodeExcludedFromDisruptionChecks(node *v1.Node) bool {
 // tryUpdateNodeHealth checks a given node's conditions and tries to update it. Returns grace period to
 // which given node is entitled, state of current and last observed Ready Condition, and an error if it occurred.
 func (nc *Controller) tryUpdateNodeHealth(node *v1.Node) (time.Duration, v1.NodeCondition, *v1.NodeCondition, error) {
+	// 根据当前获取的 node status 更新 nc.nodeHealthMap 中的数据，
+	// nc.nodeHealthMap 保存 node 最近一次的状态，并会根据 nc.nodeHealthMap 判断 node 是否已经处于 unknown 状态。
 	nodeHealth := nc.nodeHealthMap.getDeepCopy(node.Name)
 	defer func() {
 		nc.nodeHealthMap.set(node.Name, nodeHealth)

@@ -33,10 +33,12 @@ import (
 	"k8s.io/kubernetes/pkg/controller/statefulset"
 )
 
+// DaemonSetController 启动入口
 func startDaemonSetController(ctx ControllerContext) (http.Handler, bool, error) {
 	if !ctx.AvailableResources[schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}] {
 		return nil, false, nil
 	}
+	// 监听四种资源 DaemonSets, ControllerRevisions, pod, nodes 的变动
 	dsc, err := daemon.NewDaemonSetsController(
 		ctx.InformerFactory.Apps().V1().DaemonSets(),
 		ctx.InformerFactory.Apps().V1().ControllerRevisions(),

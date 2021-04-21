@@ -41,6 +41,8 @@ import (
 // rollingUpdate identifies the set of old pods to delete, or additional pods to create on nodes,
 // remaining within the constraints imposed by the update strategy.
 func (dsc *DaemonSetsController) rollingUpdate(ds *apps.DaemonSet, nodeList []*v1.Node, hash string) error {
+	// 整个滚动更新的过程是通过先删除再创建的方式一步步完成更新的，
+	// 每次操作都是严格按照 maxUnavailable 的值确定需要删除的 pod 数
 	nodeToDaemonPods, err := dsc.getNodesToDaemonPods(ds)
 	if err != nil {
 		return fmt.Errorf("couldn't get node to daemon pod mapping for daemon set %q: %v", ds.Name, err)
